@@ -1,0 +1,12 @@
+# Ignore node_modules
+node_modules/
+
+# Ignore database files
+twitterClone.db
+
+# Ignore environment files
+.env
+
+# Ignore log files and cache
+*.log
+.cache/
