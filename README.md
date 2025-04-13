@@ -7,7 +7,7 @@ A full-stack Twitter clone built with React, Node.js, and SQLite. While the back
 ### Backend API (Fully Functional)
 - Complete RESTful API implementation
 - All endpoints are working and tested
-- Secure authentication system
+- Secure authentication system with JWT
 - Real-time data handling
 - Comprehensive error handling
 
@@ -60,7 +60,7 @@ A full-stack Twitter clone built with React, Node.js, and SQLite. While the back
 - **Node.js**: Runtime environment
 - **Express.js**: Web framework
 - **SQLite**: Database
-- **JWT**: Authentication
+- **JWT**: Authentication with secure token
 - **bcrypt**: Password hashing
 
 ## Getting Started
@@ -75,8 +75,8 @@ A full-stack Twitter clone built with React, Node.js, and SQLite. While the back
 
 1. Clone the repository:
 ```bash
-git clone https://github.com/yourusername/twitter-clone.git
-cd twitter-clone
+git clone https://github.com/vyshnavi005-max/dbms_project.git
+cd dbms_project
 ```
 
 2. Install backend dependencies:
@@ -90,9 +90,13 @@ cd twitter-clone
 npm install
 ```
 
-4. Set up the database:
-```bash
-# The database will be automatically created when you start the server
+4. Set up environment variables:
+Create a `.env` file in the backend directory with:
+```env
+PORT=3000
+JWT_SECRET=MY_SECRET_TOKEN
+DATABASE_PATH=./database/twitterClone.db
+NODE_ENV=development
 ```
 
 5. Start the development servers:
@@ -106,6 +110,20 @@ npm start
 ```
 
 6. Open [http://localhost:3001](http://localhost:3001) to view the app in your browser.
+
+## Environment Variables
+
+### Backend (.env)
+- `PORT`: Server port (default: 3000)
+- `JWT_SECRET`: Secret key for JWT token (required)
+- `DATABASE_PATH`: Path to SQLite database file
+- `NODE_ENV`: Environment (development/production)
+
+### Security Notes
+- Never commit `.env` file to version control
+- Keep JWT_SECRET secure and unique
+- Use different secrets for development and production
+- Database file is excluded from version control
 
 ## API Endpoints
 
@@ -201,37 +219,18 @@ All endpoints may return the following error responses:
 ## Project Structure
 
 ```
-twitter-clone/
-├── src/                    # Frontend source code
-│   ├── components/        # Reusable React components
-│   │   ├── Tweet.js      # Tweet component
-│   │   ├── Sidebar.js    # Navigation sidebar
-│   │   └── ...          # Other components
-│   ├── pages/            # Page components
-│   │   ├── Home.js      # Home page
-│   │   ├── Profile.js   # Profile page
-│   │   └── ...          # Other pages
-│   ├── styles/          # CSS files
-│   │   ├── Home.css    # Home page styles
-│   │   └── ...         # Other styles
-│   └── App.js          # Main App component
-├── backend/             # Backend source code
-│   ├── app.js          # Express server configuration
-│   ├── index.js        # Server entry point
-│   └── database/       # Database files
-│       └── schema.sql  # Database schema
-├── package.json        # Frontend dependencies
-└── README.md          # Project documentation
-```
-
-## Environment Variables
-
-Create a `.env` file in the root directory with the following variables:
-
-```env
-PORT=3000
-JWT_SECRET=your_jwt_secret
-DATABASE_PATH=./database/twitterClone.db
+dbms_project/
+├── twitter-clone/          # Frontend source code
+│   ├── src/               # React components
+│   ├── public/            # Static files
+│   └── package.json       # Frontend dependencies
+├── backend/               # Backend source code
+│   ├── app.js            # Express server
+│   ├── index.js          # Server entry point
+│   ├── .env              # Environment variables
+│   └── database/         # Database files
+├── .gitignore            # Git ignore rules
+└── README.md            # Project documentation
 ```
 
 ## Contributing

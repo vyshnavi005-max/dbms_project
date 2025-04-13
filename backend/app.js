@@ -52,7 +52,7 @@ const authenticateToken = async (request, response, next) => {
     }
 
     try {
-        const payload = jwt.verify(jwtToken, "MY_SECRET_TOKEN");
+        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
         // Get user details from database
         const user = await db.get('SELECT user_id, username FROM User WHERE username = ?', [payload.username]);
         if (!user) {
@@ -119,7 +119,7 @@ app.post("/login", async (req, res) => {
     const token = jwt.sign({ 
         username: user.username,
         userId: user.user_id 
-    }, 'MY_SECRET_TOKEN', { expiresIn: "1h" });
+    }, process.env.JWT_SECRET, { expiresIn: "1h" });
 
     res.cookie("token", token, { httpOnly: true, secure: false, sameSite: "Lax" });
 
