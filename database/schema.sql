@@ -46,4 +46,17 @@ CREATE TABLE IF NOT EXISTS Like (
     FOREIGN KEY (user_id) REFERENCES User(user_id)
 );
 
+CREATE TABLE IF NOT EXISTS Notifications (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    user_id INTEGER,         -- Who receives the notification
+    from_user_id INTEGER,    -- Who triggered the notification
+    tweet_id INTEGER,        -- If related to a tweet
+    type TEXT,               -- "like", "reply", "retweet", "follow", "mention"
+    message TEXT,            -- Notification message
+    is_read BOOLEAN DEFAULT 0,  -- Mark as read/unread
+    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY(user_id) REFERENCES users(id),
+    FOREIGN KEY(from_user_id) REFERENCES users(id),
+    FOREIGN KEY(tweet_id) REFERENCES tweets(id)
+);
 

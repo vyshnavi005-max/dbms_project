@@ -1,0 +1,101 @@
+.tweet-card {
+  background-color: #12122e;
+  padding: 1.5rem;
+  border-radius: 16px;
+  margin-bottom: 1.5rem;
+  box-shadow: 0 2px 6px rgba(0, 0, 0, 0.3);
+  color: white;
+}
+
+.tweet-header {
+  display: flex;
+  align-items: center;
+  margin-bottom: 0.5rem;
+}
+
+.tweet-user-avatar {
+  width: 40px;
+  height: 40px;
+  background-color: #3b3b4f;
+  border-radius: 50%;
+  margin-right: 0.8rem;
+}
+
+.tweet-user-info {
+  display: flex;
+  flex-direction: column;
+}
+
+.tweet-username {
+  font-weight: bold;
+  color: #00acee;
+}
+
+.tweet-time {
+  font-size: 0.85rem;
+  color: gray;
+  margin-top: 0.2rem;
+}
+
+.tweet-content {
+  margin: 0.75rem 0;
+  font-size: 1rem;
+  color: #ddd;
+}
+
+.tweet-actions {
+  display: flex;
+  gap: 2rem;
+  align-items: center;
+  flex-wrap: wrap;
+  margin-top: 1rem;
+}
+
+.tweet-actions button {
+  background: none;
+  border: none;
+  color: #00acee;
+  font-weight: bold;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  cursor: pointer;
+  transition: transform 0.2s;
+}
+
+.tweet-actions button:hover {
+  transform: scale(1.05);
+}
+
+.likes-list,
+.replies-list {
+  margin-top: 1rem;
+  padding: 1rem;
+  background-color: #0f1824;
+  border-radius: 12px;
+  color: white;
+}
+.list{
+  list-style-type: none;
+}
+.reply-section {
+  margin-top: 1rem;
+}
+
+.reply-section input {
+  width: 100%;
+  background-color: transparent;
+  outline: none;
+  border: none;
+  color: white;
+}
+
+.reply-section button {
+  background-color: #00acee;
+  border-radius: 8px;
+  border-style: none;
+  padding: 7px 12px;
+  font-size: 12px;
+  margin-top: 0.5rem;
+  cursor: pointer;
+}
