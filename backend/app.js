@@ -18,10 +18,11 @@ app.options('*', (req, res) => {
 
 app.use(cors({
     origin: process.env.NODE_ENV === 'production' 
-        ? 'https://your-frontend-domain.vercel.app' 
+        ? 'https://vyshnavi005-max.github.io' 
         : 'http://localhost:3001',
     credentials: true,
 }));
+
 app.use(express.json())
 app.use(cookieParser());
 const dbPath = path.join(__dirname, '../database/twitterClone.db')
