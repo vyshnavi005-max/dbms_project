@@ -1305,27 +1305,44 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
         const { username } = request.user;
         console.log(`Fetching tweets for user: ${username}`);
         
+        // Get user
         const user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).json({ error: "User not found" });
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
         console.log(`Got user with ID: ${user.user_id}`);
         
-        const query = process.env.NODE_ENV === 'production'
-            ? `
-                SELECT
-                    t.tweet_id AS tweet_id,
-                    t.tweet, 
-                    COUNT(DISTINCT l.like_id) AS likes,
-                    COUNT(DISTINCT r.reply_id) AS replies,
-                    t.date_time
-                FROM "Tweet" t
-                LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
-                LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
-                WHERE t.user_id = $1
-                GROUP BY t.tweet_id, t.tweet, t.date_time
-                ORDER BY t.date_time DESC
-            `
-            : `
+        let tweets = [];
+        
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                // Use db.any instead of dbHelpers.execute for PostgreSQL
+                tweets = await db.any(`
+                    SELECT
+                        t.tweet_id AS tweet_id,
+                        t.tweet, 
+                        COUNT(DISTINCT l.like_id) AS likes,
+                        COUNT(DISTINCT r.reply_id) AS replies,
+                        t.date_time
+                    FROM "Tweet" t
+                    LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
+                    LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
+                    WHERE t.user_id = $1
+                    GROUP BY t.tweet_id, t.tweet, t.date_time
+                    ORDER BY t.date_time DESC
+                `, [user.user_id]);
+                
+                console.log(`Found ${tweets.length} tweets for user ${username}`);
+            } catch (pgError) {
+                console.error("PostgreSQL query error:", pgError);
+                console.error(pgError.stack);
+                tweets = [];
+            }
+        } else {
+            // For SQLite
+            const query = `
                 SELECT
                     t.tweet_id AS tweet_id,
                     t.tweet, 
@@ -1339,13 +1356,15 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
                 GROUP BY t.tweet_id, t.tweet, t.date_time
                 ORDER BY t.date_time DESC
             `;
+            
+            const result = await dbHelpers.execute(query, [user.user_id]);
+            tweets = Array.isArray(result) ? result : [];
+            console.log(`Found ${tweets.length} tweets for user ${username}`);
+        }
         
-        const dbResponse = await dbHelpers.execute(query, [user.user_id]);
-        console.log(`Found ${dbResponse ? dbResponse.length : 0} tweets`);
-        
-        // Ensure we're returning a valid array
-        const result = Array.isArray(dbResponse) ? dbResponse.map(convertsnakecaseToCamelCase) : [];
-        return response.json(result);
+        // Convert tweets to camel case
+        const formattedTweets = tweets.map(convertsnakecaseToCamelCase);
+        return response.json(formattedTweets);
     } catch (error) {
         console.error("Error getting tweets:", error);
         console.error(error.stack);
