@@ -93,17 +93,29 @@ function Home() {
         const data = await response.json();
         console.log("Likes data:", data);
         
-        if (data && Array.isArray(data.likes)) {
-          setLikes((prev) => ({ ...prev, [tweetId]: data.likes }));
-          if (typeof data.hasLiked === 'boolean') {
-            setLikedByUser((prev) => ({ ...prev, [tweetId]: data.hasLiked }));
+        // Clear any existing state first
+        let likesArray = [];
+        let hasUserLiked = false;
+        
+        // Handle different response formats
+        if (data && typeof data === 'object') {
+          if (Array.isArray(data)) {
+            // Handle array of like objects from the non-trailing slash endpoint
+            likesArray = data;
+            // Check if user has liked by presence of likes
+            hasUserLiked = data.some(like => like.name === data.currentUser);
+          } else if (Array.isArray(data.likes)) {
+            // Handle { likes: [...], hasLiked: bool } structure from trailing slash endpoint
+            likesArray = data.likes.map(name => ({ name }));
+            hasUserLiked = !!data.hasLiked;
           }
-        } else if (Array.isArray(data)) {
-          setLikes((prev) => ({ ...prev, [tweetId]: data.map(like => like.name) }));
-        } else {
-          console.error("Unexpected likes data format:", data);
-          setLikes((prev) => ({ ...prev, [tweetId]: [] }));
         }
+        
+        console.log("Processed likes:", likesArray);
+        
+        // Update state with processed data
+        setLikes((prev) => ({ ...prev, [tweetId]: likesArray }));
+        setLikedByUser((prev) => ({ ...prev, [tweetId]: hasUserLiked }));
       } catch (err) {
         console.error("Error fetching likes:", err);
         alert(err.message);
@@ -126,14 +138,24 @@ function Home() {
         const data = await response.json();
         console.log("Replies data:", data);
         
-        if (data && Array.isArray(data.replies)) {
-          setReplies((prev) => ({ ...prev, [tweetId]: data.replies }));
-        } else if (Array.isArray(data)) {
-          setReplies((prev) => ({ ...prev, [tweetId]: data }));
-        } else {
-          console.error("Unexpected replies data format:", data);
-          setReplies((prev) => ({ ...prev, [tweetId]: [] }));
+        // Clear any existing state first
+        let repliesArray = [];
+        
+        // Handle different response formats
+        if (data && typeof data === 'object') {
+          if (Array.isArray(data)) {
+            // Handle array of reply objects from the non-trailing slash endpoint
+            repliesArray = data;
+          } else if (Array.isArray(data.replies)) {
+            // Handle { replies: [...] } structure from trailing slash endpoint
+            repliesArray = data.replies;
+          }
         }
+        
+        console.log("Processed replies:", repliesArray);
+        
+        // Update state with processed data
+        setReplies((prev) => ({ ...prev, [tweetId]: repliesArray }));
       } catch (err) {
         console.error("Error fetching replies:", err);
         alert(err.message);
@@ -248,9 +270,17 @@ function Home() {
                               {likes[tweet.tweetId].map((like, index) => (
                                 <li key={index} className="like-item">
                                   <div className="like-user-avatar">
-                                    {like && typeof like === 'string' ? like.charAt(0).toUpperCase() : '?'}
+                                    {typeof like === 'string' 
+                                      ? like.charAt(0).toUpperCase() 
+                                      : like.name 
+                                        ? like.name.charAt(0).toUpperCase() 
+                                        : '?'}
                                   </div>
-                                  <span className="like-username">@{like || 'unknown'}</span>
+                                  <span className="like-username">
+                                    {typeof like === 'string' 
+                                      ? like 
+                                      : like.name || 'unknown'}
+                                  </span>
                                 </li>
                               ))}
                             </ul>
@@ -267,7 +297,14 @@ function Home() {
                             <ul className="replies-list">
                               {replies[tweet.tweetId].map((reply, index) => (
                                 <li key={index}>
-                                  <strong>{reply.name}:</strong> {reply.reply}
+                                  <strong>
+                                    {typeof reply === 'object' && reply.name 
+                                      ? reply.name 
+                                      : 'Unknown'}
+                                  </strong>: 
+                                  {typeof reply === 'object' && reply.reply 
+                                    ? reply.reply 
+                                    : (typeof reply === 'string' ? reply : '')}
                                 </li>
                               ))}
                             </ul>
