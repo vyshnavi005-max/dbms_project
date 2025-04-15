@@ -11,11 +11,10 @@ const dotenv = require('dotenv')
 const fs = require('fs')
 dotenv.config();
 
-// Set up CORS properly for all endpoints
 // Define allowed origins
 const allowedOrigins = process.env.NODE_ENV === 'production' 
-    ? ['https://vyshnavi005-max.github.io'] 
-    : ['http://localhost:3001'];
+    ? ['https://vyshnavi005-max.github.io', 'https://twitter-clone-backend-534j.onrender.com'] 
+    : ['http://localhost:3001', 'http://localhost:3000'];
 
 // Use a more flexible CORS configuration
 app.use(cors({
@@ -23,20 +22,36 @@ app.use(cors({
         // Allow requests with no origin (like mobile apps, curl requests)
         if (!origin) return callback(null, true);
         
+        console.log("Request from origin:", origin);
+        
         if (allowedOrigins.indexOf(origin) === -1) {
             const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            console.log(`CORS blocked origin: ${origin}`);
             return callback(new Error(msg), false);
         }
         return callback(null, true);
     },
     credentials: true,
     methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization']
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
 }));
 
 // Handle OPTIONS requests explicitly
 app.options('*', (req, res) => {
+    const origin = req.headers.origin;
+    if (allowedOrigins.includes(origin)) {
+        res.setHeader('Access-Control-Allow-Origin', origin);
+    }
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
+    res.setHeader('Access-Control-Allow-Credentials', 'true');
     res.status(204).end();
+});
+
+// Add a middleware to log all requests
+app.use((req, res, next) => {
+    console.log(`${req.method} ${req.url} from ${req.headers.origin || 'Unknown Origin'}`);
+    next();
 });
 
 app.use(express.json())
@@ -202,8 +217,13 @@ app.get("/", (request, response) => {
 
 app.post("/register", async (request, response) => {
     try {
+        console.log("Register request received:", request.body);
         const { username, password, name, gender } = request.body;
         const validGenders = ["Male", "Female", "Other"];
+        
+        if (!username || !password || !name || !gender) {
+            return response.status(400).send("All fields (username, password, name, gender) are required");
+        }
         
         if (!validGenders.includes(gender)) {
             return response.status(400).send("Invalid gender. Choose 'Male', 'Female', or 'Other'.");
@@ -215,39 +235,39 @@ app.post("/register", async (request, response) => {
         
         // Check if user exists
         let dbUser;
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            dbUser = await db.oneOrNone('SELECT * FROM "User" WHERE username = $1', [username]);
-        } else {
-            // SQLite query
-            const getUserQuery = `
-            select *
-            from User
-            where username='${username}'`;
-            dbUser = await db.get(getUserQuery);
-        }
-        
-        if (dbUser == undefined) {
-            const hashedPassword = await bcrypt.hash(password, 10);
-            
-            // Insert new user
+        try {
             if (process.env.NODE_ENV === 'production') {
                 // PostgreSQL query
-                await db.none(
-                    'INSERT INTO "User"(name, username, password, gender) VALUES($1, $2, $3, $4)',
-                    [name, username, hashedPassword, gender]
-                );
+                dbUser = await db.oneOrNone('SELECT * FROM "User" WHERE username = $1', [username]);
             } else {
-                // SQLite query
-                const addUserQuery = `
-                insert into User(name, username, password, gender)
-                values('${name}', '${username}', '${hashedPassword}', '${gender}')`;
-                await db.run(addUserQuery);
+                // SQLite query - using parameterized query
+                const getUserQuery = `SELECT * FROM User WHERE username = ?`;
+                dbUser = await db.get(getUserQuery, [username]);
             }
             
-            return response.status(200).send('User created successfully');
-        } else {
-            return response.status(400).send('User already exists');
+            if (dbUser == undefined) {
+                const hashedPassword = await bcrypt.hash(password, 10);
+                
+                // Insert new user
+                if (process.env.NODE_ENV === 'production') {
+                    // PostgreSQL query
+                    await db.none(
+                        'INSERT INTO "User"(name, username, password, gender) VALUES($1, $2, $3, $4)',
+                        [name, username, hashedPassword, gender]
+                    );
+                } else {
+                    // SQLite query - using parameterized query
+                    const addUserQuery = `INSERT INTO User(name, username, password, gender) VALUES(?, ?, ?, ?)`;
+                    await db.run(addUserQuery, [name, username, hashedPassword, gender]);
+                }
+                
+                return response.status(200).send('User created successfully');
+            } else {
+                return response.status(400).send('User already exists');
+            }
+        } catch (dbError) {
+            console.error("Database error during registration:", dbError);
+            return response.status(500).send('Database error during registration');
         }
     } catch (error) {
         console.error("Registration error:", error);
@@ -326,11 +346,11 @@ const convertToCamelCaseForTweets = (tweets) => ({
 app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let dbResponse;
+        let user, dbResponse;
         
         if (process.env.NODE_ENV === 'production') {
             // PostgreSQL query
-            const user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
             if (!user) return response.status(400).send("User not found");
             
             dbResponse = await db.any(`
@@ -340,20 +360,24 @@ app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
                 JOIN "User" u ON u.user_id = t.user_id
                 WHERE f.follower_user_id = $1
                 ORDER BY t.date_time DESC
+                LIMIT 10
             `, [user.user_id]);
         } else {
-            // SQLite query
-            const getUserIdQuery = `SELECT user_id FROM User WHERE username ='${username}'`;
-            const user = await db.get(getUserIdQuery);
+            // SQLite query - using parameterized query
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
+            
             const getTweetsQuery = `
                 SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
                 FROM Tweet
                 JOIN Follower ON Tweet.user_id = Follower.following_user_id
                 JOIN User ON User.user_id = Tweet.user_id
-                WHERE Follower.follower_user_id = ${user.user_id}
+                WHERE Follower.follower_user_id = ?
                 ORDER BY Tweet.date_time DESC
+                LIMIT 10
             `;
-            dbResponse = await db.all(getTweetsQuery);
+            dbResponse = await db.all(getTweetsQuery, [user.user_id]);
         }
         
         response.send(dbResponse.map(convertToCamelCaseForTweets));
