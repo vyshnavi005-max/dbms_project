@@ -1,6 +1,7 @@
 // Quick fix script for testing database connection on Render.com
 const dotenv = require('dotenv');
 const pgp = require('pg-promise')();
+const express = require('express');
 
 dotenv.config();
 
@@ -38,18 +39,35 @@ async function testConnection() {
   } catch (error) {
     console.error('Database connection failed:', error);
     return false;
-  } finally {
-    // Close db connection
-    pgp.end();
   }
 }
 
-testConnection().then(success => {
-  if (success) {
-    console.log('Ready to start the server');
-    process.exit(0); // Exit with success
-  } else {
-    console.error('Database checks failed');
-    process.exit(1); // Exit with error
+async function startTestServer() {
+  try {
+    const success = await testConnection();
+    
+    if (!success) {
+      console.error('Database checks failed');
+      process.exit(1); // Exit with error
+    }
+    
+    // Create minimal Express server for Render to detect
+    const app = express();
+    
+    app.get('/', (req, res) => {
+      res.send('Database connection successful! Ready to deploy main app.');
+    });
+    
+    const PORT = process.env.PORT || 3000;
+    app.listen(PORT, '0.0.0.0', () => {
+      console.log(`Test server running on port ${PORT}`);
+      console.log('Ready to start the main server');
+    });
+    
+  } catch (error) {
+    console.error('Server startup error:', error);
+    process.exit(1);
   }
-}); 
+}
+
+startTestServer(); 

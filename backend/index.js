@@ -11,11 +11,14 @@ console.log(`Database URL present: ${process.env.DATABASE_URL ? 'Yes' : 'No'}`);
 console.log(`Running on Render: ${process.env.RENDER ? 'Yes' : 'No'}`);
 
 const app = require('./app');
-const server = http.createServer(app);
 
+// Get the port from environment variables or default to 3000
 const PORT = process.env.PORT || 3000;
 
-server.listen(PORT, () => {
+// Start the server on 0.0.0.0 for Render to detect it
+const server = http.createServer(app);
+
+server.listen(PORT, "0.0.0.0", () => {
     console.log(`Server is running on port ${PORT}`);
     console.log(`Current NODE_ENV: ${process.env.NODE_ENV || 'development'}`);
 });
