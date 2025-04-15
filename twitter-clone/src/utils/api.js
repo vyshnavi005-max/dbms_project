@@ -1,10 +1,7 @@
 // Central configuration for API calls
 
-// Use hardcoded values instead of environment variables
-// GitHub Pages has issues with environment variables at runtime
-export const API_URL = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1'
-  ? 'http://localhost:3000'
-  : 'https://twitter-clone-backend-534j.onrender.com';
+// Use the environment variable for API URL
+export const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:3000';
 
 // Helper function for making API requests
 export const apiRequest = async (endpoint, options = {}) => {
