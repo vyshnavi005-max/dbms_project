@@ -576,20 +576,9 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
       }
       
       let likes = [];
-      let hasUserLiked = false;
       
       if (process.env.NODE_ENV === 'production') {
           try {
-              // First check if current user has liked this tweet
-              const userLike = await db.oneOrNone(`
-                  SELECT 1 
-                  FROM "Like" 
-                  WHERE user_id = $1 AND tweet_id = $2
-              `, [user.user_id, tweetId]);
-              
-              hasUserLiked = !!userLike;
-              console.log(`Has user ${username} liked tweet ${tweetId}? ${hasUserLiked}`);
-              
               // Get all likes for this tweet without any filtering
               likes = await db.any(`
                   SELECT u.name
@@ -605,15 +594,6 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
               likes = [];
           }
       } else {
-          // First check if current user has liked this tweet
-          const userLike = await dbHelpers.execute(
-              'SELECT 1 FROM Like WHERE user_id = ? AND tweet_id = ?',
-              [user.user_id, tweetId]
-          );
-          
-          hasUserLiked = !!userLike;
-          console.log(`Has user ${username} liked tweet ${tweetId}? ${hasUserLiked}`);
-          
           // SQLite - get all likes without any filtering
           const query = `
               SELECT u.name
@@ -627,12 +607,13 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
           console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
       }
       
-      // Format the response - ensure we have an array to map over
+      // Format the response to match frontend expectations
       const likeNames = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
       
+      console.log(`Response for tweet ${tweetId} likes:`, { likes: likeNames });
+      
       return res.json({
-          likes: likeNames,
-          hasLiked: hasUserLiked
+          likes: likeNames
       });
   } catch (error) {
       console.error("Error fetching likes:", error);
@@ -700,13 +681,15 @@ app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
           console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
       }
       
-      // Format the response - ensure we have an array to map over
+      // Format the response - map to the structure expected by frontend
       const formattedReplies = Array.isArray(replies) 
           ? replies.map(item => ({
               name: item?.name || '',
               reply: item?.reply || ''
           }))
           : [];
+      
+      console.log(`Response for tweet ${tweetId} replies:`, { replies: formattedReplies });
       
       return res.json({ replies: formattedReplies });
   } catch (error) {
@@ -1796,7 +1779,7 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                     SELECT 
                         n.id as notification_id, 
                         n.message as content, 
-                        COALESCE(n.created_at, CURRENT_TIMESTAMP) as date_time, 
+                        TO_CHAR(COALESCE(n.created_at, CURRENT_TIMESTAMP), 'MM/DD/YYYY, HH12:MI:SS AM') as date_time,
                         n.is_read, 
                         u.username as triggered_by_username 
                     FROM "Notifications" n
@@ -1819,7 +1802,7 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                     SELECT 
                         n.id as notification_id, 
                         n.message as content, 
-                        COALESCE(n.date_time, datetime('now')) as date_time, 
+                        strftime('%m/%d/%Y, %H:%M:%S', COALESCE(n.date_time, datetime('now'))) as date_time,
                         n.is_read, 
                         u.username as triggered_by_username 
                     FROM Notifications n
@@ -1838,28 +1821,26 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             }
         }
         
-        // Normalize results and ensure valid dates
-        const normalizedNotifications = notifications.map(n => {
-            // Ensure date is valid or use current date
-            let dateTime;
-            try {
-                // Try to parse the date, if it's invalid use current date
-                dateTime = n?.date_time ? new Date(n.date_time).toISOString() : new Date().toISOString();
-            } catch (e) {
-                console.error("Invalid date format:", n?.date_time);
-                dateTime = new Date().toISOString();
-            }
+        // Format notifications - ensure they match the expected frontend format
+        const formattedNotifications = notifications.map(n => {
+            // Using a properly formatted string date that JavaScript can handle
+            const dateStr = n?.date_time || new Date().toLocaleString();
             
             return {
                 notification_id: n?.notification_id || 0, 
                 content: n?.content || n?.message || '',
-                date_time: dateTime,
+                date_time: dateStr, // Use the formatted date string directly
                 is_read: !!n?.is_read,
-                triggered_by_username: n?.triggered_by_username || null
+                triggered_by_username: n?.triggered_by_username || ''
             };
         });
         
-        return response.json(normalizedNotifications);
+        console.log(`Returning ${formattedNotifications.length} notifications with formatted dates`);
+        if (formattedNotifications.length > 0) {
+            console.log("Sample notification date:", formattedNotifications[0].date_time);
+        }
+        
+        return response.json(formattedNotifications);
     } catch (error) {
         console.error("Error fetching notifications:", error);
         console.error(error.stack);
