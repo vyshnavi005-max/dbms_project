@@ -10,6 +10,7 @@ import {
   FaSignOutAlt,
 } from "react-icons/fa";
 import "../styles/Profile.css";
+import { API_URL } from "../utils/api";
 
 const Profile = () => {
   const [menuOpen, setMenuOpen] = useState(false);
@@ -29,16 +30,16 @@ const Profile = () => {
       try {
         const [tweetsRes, followersRes, followingRes, profileRes] =
           await Promise.all([
-            fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
+            fetch(`${API_URL}/user/tweets/`, {
               credentials: "include",
             }),
-            fetch(`${process.env.REACT_APP_API_URL}/user/followers/`, {
+            fetch(`${API_URL}/user/followers/`, {
               credentials: "include",
             }),
-            fetch(`${process.env.REACT_APP_API_URL}/user/following/`, {
+            fetch(`${API_URL}/user/following/`, {
               credentials: "include",
             }),
-            fetch(`${process.env.REACT_APP_API_URL}/profile`, {
+            fetch(`${API_URL}/profile`, {
               credentials: "include",
             }),
           ]);
@@ -75,7 +76,7 @@ const Profile = () => {
   const handleLikeTweet = async (tweetId) => {
     try {
       const res = await fetch(
-        `${process.env.REACT_APP_API_URL}/tweets/${tweetId}/like`,
+        `${API_URL}/tweets/${tweetId}/like`,
         {
           method: "POST",
           credentials: "include",
@@ -83,7 +84,7 @@ const Profile = () => {
       );
       if (!res.ok) throw new Error("Failed to like");
 
-      const updated = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
+      const updated = await fetch(`${API_URL}/user/tweets/`, {
         credentials: "include",
       });
       const updatedTweets = await updated.json();
@@ -95,7 +96,7 @@ const Profile = () => {
 
   const handleDeleteTweet = async (tweetId) => {
     try {
-      const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/`, {
+      const res = await fetch(`${API_URL}/tweets/${tweetId}/`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -112,7 +113,7 @@ const Profile = () => {
   const handleTweet = async () => {
     if (newTweet.trim()) {
       try {
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets`, {
+        const response = await fetch(`${API_URL}/user/tweets`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -121,7 +122,7 @@ const Profile = () => {
 
         if (response.ok) {
           setNewTweet("");
-          const res = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
+          const res = await fetch(`${API_URL}/user/tweets/`, {
             credentials: "include",
           });
           const updatedTweets = await res.json();

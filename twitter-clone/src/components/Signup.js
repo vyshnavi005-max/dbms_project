@@ -1,7 +1,8 @@
 import React, { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { Link, useNavigate } from "react-router-dom";
 import { FaEye, FaEyeSlash } from "react-icons/fa";
 import "../styles/Signup.css";
+import { API_URL } from "../utils/api";
 
 const Signup = () => {
   const [formData, setFormData] = useState({
@@ -38,7 +39,7 @@ const Signup = () => {
     }
 
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/register`, {
+      const response = await fetch(`${API_URL}/register`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

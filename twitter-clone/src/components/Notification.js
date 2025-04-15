@@ -2,6 +2,7 @@ import React, { useState, useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 import { FaHeart,FaReply,FaBars,FaTimes,FaHome,FaUser,FaBell,FaSignOutAlt,} from "react-icons/fa";
 import "../styles/Notification.css";
+import { API_URL } from "../utils/api";
 
 const Notifications = () => {
   const [notifications, setNotifications] = useState([]);
@@ -11,7 +12,7 @@ const Notifications = () => {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/notifications/`, {
+        const response = await fetch(`${API_URL}/notifications/`, {
           credentials: "include",
         });
         const data = await response.json();
@@ -26,7 +27,7 @@ const Notifications = () => {
 
   const handleLikeNotification = async (tweetId) => {
     try {
-      await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/like`, {
+      await fetch(`${API_URL}/tweets/${tweetId}/like`, {
         method: "POST",
         credentials: "include",
       });
@@ -41,7 +42,7 @@ const Notifications = () => {
     if (!replyText?.trim()) return;
 
     try {
-      await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/reply`, {
+      await fetch(`${API_URL}/tweets/${tweetId}/reply`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { FaHeart, FaTrash } from 'react-icons/fa';
+import { FaHeart, FaComment, FaTrash } from 'react-icons/fa';
+import { API_URL } from "../utils/api";
 import '../styles/Tweet.css';
 
 const Tweet = ({ userDetails, tweet, onLike, onDelete }) => {
@@ -14,7 +15,7 @@ const Tweet = ({ userDetails, tweet, onLike, onDelete }) => {
   const toggleOwnLikes = async () => {
     if (!showOwnLikes) {
       try {
-        const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/likes`, {
+        const res = await fetch(`${API_URL}/tweets/${tweetId}/likes`, {
           credentials: 'include',
         });
         const data = await res.json();
@@ -30,7 +31,7 @@ const Tweet = ({ userDetails, tweet, onLike, onDelete }) => {
   const toggleOwnReplies = async () => {
     if (!showOwnReplies) {
       try {
-        const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/replies`, {
+        const res = await fetch(`${API_URL}/tweets/${tweetId}/replies`, {
           credentials: 'include',
         });
         const data = await res.json();

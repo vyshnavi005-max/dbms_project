@@ -13,6 +13,7 @@ import {
 } from "react-icons/fa";
 import "../styles/Home.css";
 import SuggestionsSidebar from "./SuggestionsSidebar";
+import { API_URL } from "../utils/api";
 
 function Home() {
   const [feed, setFeed] = useState([]);
@@ -30,7 +31,7 @@ function Home() {
   useEffect(() => {
     const fetchFeed = async () => {
       try {
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets/feed/`, {
+        const response = await fetch(`${API_URL}/user/tweets/feed/`, {
           method: "GET",
           credentials: "include",
         });
@@ -50,7 +51,7 @@ function Home() {
 
   const handleLike = async (tweetId) => {
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/like`, {
+      const response = await fetch(`${API_URL}/tweets/${tweetId}/like`, {
         method: "POST",
         credentials: "include",
       });
@@ -83,7 +84,7 @@ function Home() {
 
     if (!isVisible) {
       try {
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/likes/`, {
+        const response = await fetch(`${API_URL}/tweets/${tweetId}/likes/`, {
           method: "GET",
           credentials: "include",
         });
@@ -104,7 +105,7 @@ function Home() {
 
     if (!isVisible) {
       try {
-        const response = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/replies/`, {
+        const response = await fetch(`${API_URL}/tweets/${tweetId}/replies/`, {
           method: "GET",
           credentials: "include",
         });
@@ -128,7 +129,7 @@ function Home() {
     if (!replyText) return alert("Reply cannot be empty!");
 
     try {
-      const response = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/reply`, {
+      const response = await fetch(`${API_URL}/tweets/${tweetId}/reply`, {
         method: "POST",
         credentials: "include",
         headers: {

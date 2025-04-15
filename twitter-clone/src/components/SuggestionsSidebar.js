@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 import '../styles/SuggestionsSidebar.css';
+import { API_URL } from "../utils/api";
 
 const SuggestionsSidebar = () => {
     const [suggestions, setSuggestions] = useState([]);
@@ -14,7 +15,7 @@ const SuggestionsSidebar = () => {
     const fetchSuggestions = async () => {
         try {
             setLoading(true);
-            const response = await axios.get(`${process.env.REACT_APP_API_URL}/suggestions`, {
+            const response = await axios.get(`${API_URL}/suggestions`, {
                 withCredentials: true,
                 headers: {
                     'Content-Type': 'application/json'
@@ -40,7 +41,7 @@ const SuggestionsSidebar = () => {
 
     const handleFollow = async (userId) => {
         try {
-            await axios.post(`${process.env.REACT_APP_API_URL}/follow/${userId}`, {}, {
+            await axios.post(`${API_URL}/follow/${userId}`, {}, {
                 withCredentials: true,
                 headers: {
                     'Content-Type': 'application/json'
