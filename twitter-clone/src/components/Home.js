@@ -26,6 +26,7 @@ function Home() {
   const [replies, setReplies] = useState({});
   const [visibleReplies, setVisibleReplies] = useState({});
   const [replyInputs, setReplyInputs] = useState({});
+  const [postingReply, setPostingReply] = useState(false);
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -84,6 +85,8 @@ function Home() {
 
     if (!isVisible) {
       try {
+        console.log(`Fetching likes for tweet ${tweetId}`);
+        // First try the version with trailing slash
         const response = await fetch(`${API_URL}/tweets/${tweetId}/likes/`, {
           method: "GET",
           credentials: "include",
@@ -93,32 +96,39 @@ function Home() {
         const data = await response.json();
         console.log("Likes data:", data);
         
-        // Clear any existing state first
+        // Initialize variables for processed data
         let likesArray = [];
         let hasUserLiked = false;
         
-        // Handle different response formats
         if (data && typeof data === 'object') {
           if (Array.isArray(data)) {
-            // Handle array of like objects from the non-trailing slash endpoint
+            // Handle array of objects with tweetId and name properties
+            // This is the format: [ { tweetId: 11, name: 'Abhigna' } ]
+            console.log("Processing array of like objects");
             likesArray = data;
-            // Check if user has liked by presence of likes
-            hasUserLiked = data.some(like => like.name === data.currentUser);
+            
+            // Get current username from elsewhere in state if possible
+            const currentUsername = data.currentUser;
+            hasUserLiked = data.some(like => 
+              currentUsername && like.name === currentUsername);
+            
           } else if (Array.isArray(data.likes)) {
-            // Handle { likes: [...], hasLiked: bool } structure from trailing slash endpoint
-            likesArray = data.likes.map(name => ({ name }));
+            // Handle { likes: [...], hasLiked: bool } format
+            console.log("Processing likes array from object");
+            likesArray = data.likes.map(name => 
+              typeof name === 'string' ? { name } : name);
             hasUserLiked = !!data.hasLiked;
           }
         }
         
-        console.log("Processed likes:", likesArray);
+        console.log("Processed likes array:", likesArray);
         
         // Update state with processed data
         setLikes((prev) => ({ ...prev, [tweetId]: likesArray }));
         setLikedByUser((prev) => ({ ...prev, [tweetId]: hasUserLiked }));
       } catch (err) {
         console.error("Error fetching likes:", err);
-        alert(err.message);
+        alert("Failed to load likes. Please try again.");
       }
     }
   };
@@ -129,6 +139,7 @@ function Home() {
 
     if (!isVisible) {
       try {
+        console.log(`Fetching replies for tweet ${tweetId}`);
         const response = await fetch(`${API_URL}/tweets/${tweetId}/replies/`, {
           method: "GET",
           credentials: "include",
@@ -138,27 +149,29 @@ function Home() {
         const data = await response.json();
         console.log("Replies data:", data);
         
-        // Clear any existing state first
+        // Initialize variable for processed data
         let repliesArray = [];
         
-        // Handle different response formats
         if (data && typeof data === 'object') {
           if (Array.isArray(data)) {
-            // Handle array of reply objects from the non-trailing slash endpoint
+            // Handle array of reply objects with name and reply properties
+            // Format: [ { tweetId: 7, name: 'Abhigna', reply: 'HEYY!! HRU??' } ]
+            console.log("Processing array of reply objects");
             repliesArray = data;
           } else if (Array.isArray(data.replies)) {
-            // Handle { replies: [...] } structure from trailing slash endpoint
+            // Handle { replies: [...] } format
+            console.log("Processing replies array from object");
             repliesArray = data.replies;
           }
         }
         
-        console.log("Processed replies:", repliesArray);
+        console.log("Processed replies array:", repliesArray);
         
         // Update state with processed data
         setReplies((prev) => ({ ...prev, [tweetId]: repliesArray }));
       } catch (err) {
         console.error("Error fetching replies:", err);
-        alert(err.message);
+        alert("Failed to load replies. Please try again.");
       }
     }
   };
@@ -172,6 +185,7 @@ function Home() {
     if (!replyText) return alert("Reply cannot be empty!");
 
     try {
+      setPostingReply(true);
       const response = await fetch(`${API_URL}/tweets/${tweetId}/reply`, {
         method: "POST",
         credentials: "include",
@@ -188,6 +202,8 @@ function Home() {
       toggleReplies(tweetId); // Refresh replies after posting
     } catch (err) {
       alert(err.message);
+    } finally {
+      setPostingReply(false);
     }
   };
 
@@ -270,16 +286,18 @@ function Home() {
                               {likes[tweet.tweetId].map((like, index) => (
                                 <li key={index} className="like-item">
                                   <div className="like-user-avatar">
-                                    {typeof like === 'string' 
-                                      ? like.charAt(0).toUpperCase() 
-                                      : like.name 
-                                        ? like.name.charAt(0).toUpperCase() 
+                                    {like && like.name 
+                                      ? like.name.charAt(0).toUpperCase() 
+                                      : typeof like === 'string'
+                                        ? like.charAt(0).toUpperCase()
                                         : '?'}
                                   </div>
                                   <span className="like-username">
-                                    {typeof like === 'string' 
-                                      ? like 
-                                      : like.name || 'unknown'}
+                                    {like && like.name 
+                                      ? like.name
+                                      : typeof like === 'string'
+                                        ? like 
+                                        : 'unknown'}
                                   </span>
                                 </li>
                               ))}
@@ -291,34 +309,44 @@ function Home() {
                       )}
 
                       {visibleReplies[tweet.tweetId] && (
-                        <div className="replies-section">
+                        <div className="replies-container">
                           <h4>Replies</h4>
-                          {replies[tweet.tweetId]?.length > 0 ? (
-                            <ul className="replies-list">
+                          {replies[tweet.tweetId] && replies[tweet.tweetId].length > 0 ? (
+                            <div className="replies-list">
                               {replies[tweet.tweetId].map((reply, index) => (
-                                <li key={index}>
-                                  <strong>
+                                <div key={index} className="reply">
+                                  <div className="reply-avatar">
                                     {typeof reply === 'object' && reply.name 
-                                      ? reply.name 
-                                      : 'Unknown'}
-                                  </strong>: 
-                                  {typeof reply === 'object' && reply.reply 
-                                    ? reply.reply 
-                                    : (typeof reply === 'string' ? reply : '')}
-                                </li>
+                                      ? reply.name.charAt(0).toUpperCase() 
+                                      : (typeof reply === 'string' ? reply.charAt(0).toUpperCase() : 'U')}
+                                  </div>
+                                  <div className="reply-content">
+                                    <div className="reply-username">
+                                      {typeof reply === 'object' && reply.name ? reply.name : (typeof reply === 'string' ? reply : 'Unknown User')}
+                                    </div>
+                                    <div className="reply-text">
+                                      {typeof reply === 'object' && reply.reply ? reply.reply : reply}
+                                    </div>
+                                  </div>
+                                </div>
                               ))}
-                            </ul>
+                            </div>
                           ) : (
-                            <p className="no-replies">No replies yet</p>
+                            <p>No replies yet.</p>
                           )}
-                          <div className="reply-input">
+                          <div className="reply-input-container">
                             <input
                               type="text"
                               placeholder="Write a reply..."
-                              value={replyInputs[tweet.tweetId] || ""}
+                              value={replyInputs[tweet.tweetId] || ''}
                               onChange={(e) => handleReplyChange(tweet.tweetId, e.target.value)}
+                              className="reply-input"
                             />
-                            <button onClick={() => handleReplySubmit(tweet.tweetId)}>
+                            <button 
+                              onClick={() => handleReplySubmit(tweet.tweetId)}
+                              className="reply-button"
+                              disabled={!replyInputs[tweet.tweetId] || postingReply}
+                            >
                               Reply
                             </button>
                           </div>
