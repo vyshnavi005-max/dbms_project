@@ -14,7 +14,7 @@ const SuggestionsSidebar = () => {
     const fetchSuggestions = async () => {
         try {
             setLoading(true);
-            const response = await axios.get('http://localhost:3000/suggestions', {
+            const response = await axios.get(`${process.env.REACT_APP_API_URL}/suggestions`, {
                 withCredentials: true,
                 headers: {
                     'Content-Type': 'application/json'
@@ -40,14 +40,14 @@ const SuggestionsSidebar = () => {
 
     const handleFollow = async (userId) => {
         try {
-            await axios.post(`http://localhost:3000/follow/${userId}`, {}, {
+            await axios.post(`${process.env.REACT_APP_API_URL}/follow/${userId}`, {}, {
                 withCredentials: true,
                 headers: {
                     'Content-Type': 'application/json'
                 }
             });
-            // Refresh suggestions after following
-            fetchSuggestions();
+            // Filter out the followed user from suggestions
+            setSuggestions(prev => prev.filter(user => user.user_id !== userId));
         } catch (error) {
             console.error('Error following user:', error);
             if (error.response && error.response.status === 401) {

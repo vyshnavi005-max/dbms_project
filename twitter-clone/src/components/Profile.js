@@ -29,16 +29,16 @@ const Profile = () => {
       try {
         const [tweetsRes, followersRes, followingRes, profileRes] =
           await Promise.all([
-            fetch("http://localhost:3000/user/tweets/", {
+            fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
               credentials: "include",
             }),
-            fetch("http://localhost:3000/user/followers/", {
+            fetch(`${process.env.REACT_APP_API_URL}/user/followers/`, {
               credentials: "include",
             }),
-            fetch("http://localhost:3000/user/following/", {
+            fetch(`${process.env.REACT_APP_API_URL}/user/following/`, {
               credentials: "include",
             }),
-            fetch("http://localhost:3000/profile", {
+            fetch(`${process.env.REACT_APP_API_URL}/profile`, {
               credentials: "include",
             }),
           ]);
@@ -75,7 +75,7 @@ const Profile = () => {
   const handleLikeTweet = async (tweetId) => {
     try {
       const res = await fetch(
-        `http://localhost:3000/tweets/${tweetId}/like`,
+        `${process.env.REACT_APP_API_URL}/tweets/${tweetId}/like`,
         {
           method: "POST",
           credentials: "include",
@@ -83,7 +83,7 @@ const Profile = () => {
       );
       if (!res.ok) throw new Error("Failed to like");
 
-      const updated = await fetch("http://localhost:3000/user/tweets/", {
+      const updated = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
         credentials: "include",
       });
       const updatedTweets = await updated.json();
@@ -95,7 +95,7 @@ const Profile = () => {
 
   const handleDeleteTweet = async (tweetId) => {
     try {
-      const res = await fetch(`http://localhost:3000/tweets/${tweetId}/`, {
+      const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/`, {
         method: "DELETE",
         credentials: "include",
       });
@@ -112,7 +112,7 @@ const Profile = () => {
   const handleTweet = async () => {
     if (newTweet.trim()) {
       try {
-        const response = await fetch("http://localhost:3000/user/tweets", {
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           credentials: "include",
@@ -121,7 +121,7 @@ const Profile = () => {
 
         if (response.ok) {
           setNewTweet("");
-          const res = await fetch("http://localhost:3000/user/tweets/", {
+          const res = await fetch(`${process.env.REACT_APP_API_URL}/user/tweets/`, {
             credentials: "include",
           });
           const updatedTweets = await res.json();

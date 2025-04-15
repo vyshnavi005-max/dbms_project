@@ -10,3 +10,6 @@ SELECT * From Notifications;
 --where tweet_id= 3 and user_id = 1;
 --DELETE from Notifications 
 --where user_id in (1,3) AND from_user_id= 1;
+
+
+

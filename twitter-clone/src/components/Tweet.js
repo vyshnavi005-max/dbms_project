@@ -14,7 +14,7 @@ const Tweet = ({ userDetails, tweet, onLike, onDelete }) => {
   const toggleOwnLikes = async () => {
     if (!showOwnLikes) {
       try {
-        const res = await fetch(`http://localhost:3000/user/tweets/likes/`, {
+        const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/likes`, {
           credentials: 'include',
         });
         const data = await res.json();
@@ -30,7 +30,7 @@ const Tweet = ({ userDetails, tweet, onLike, onDelete }) => {
   const toggleOwnReplies = async () => {
     if (!showOwnReplies) {
       try {
-        const res = await fetch(`http://localhost:3000/user/tweets/replies/`, {
+        const res = await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/replies`, {
           credentials: 'include',
         });
         const data = await res.json();

@@ -11,7 +11,7 @@ const Notifications = () => {
   useEffect(() => {
     const fetchNotifications = async () => {
       try {
-        const response = await fetch("http://localhost:3000/notifications/", {
+        const response = await fetch(`${process.env.REACT_APP_API_URL}/notifications/`, {
           credentials: "include",
         });
         const data = await response.json();
@@ -26,7 +26,7 @@ const Notifications = () => {
 
   const handleLikeNotification = async (tweetId) => {
     try {
-      await fetch(`http://localhost:3000/tweets/${tweetId}/like`, {
+      await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/like`, {
         method: "POST",
         credentials: "include",
       });
@@ -41,12 +41,12 @@ const Notifications = () => {
     if (!replyText?.trim()) return;
 
     try {
-      await fetch(`http://localhost:3000/tweets/${tweetId}/reply`, {
+      await fetch(`${process.env.REACT_APP_API_URL}/tweets/${tweetId}/reply`, {
         method: "POST",
-        credentials: "include",
         headers: {
           "Content-Type": "application/json",
         },
+        credentials: "include",
         body: JSON.stringify({ replyText }),
       });
       alert("Reply sent!");

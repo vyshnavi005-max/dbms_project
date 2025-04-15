@@ -60,3 +60,4 @@ CREATE TABLE IF NOT EXISTS Notifications (
     FOREIGN KEY(tweet_id) REFERENCES tweets(id)
 );
 
+

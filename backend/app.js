@@ -7,6 +7,10 @@ const jwt = require('jsonwebtoken')
 const cors = require("cors");
 const cookieParser = require('cookie-parser');
 const app = express()
+const dotenv = require('dotenv')
+const fs = require('fs')
+dotenv.config();
+
 app.options('*', (req, res) => {
     res.header("Access-Control-Allow-Origin", "http://localhost:3001");
     res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
@@ -25,20 +29,111 @@ app.use(cors({
 
 app.use(express.json())
 app.use(cookieParser());
-const dbPath = path.join(__dirname, '../database/twitterClone.db')
-let db = null
-const intializeServer = async () => {
+
+// Database setup
+let db = null;
+
+const initializeServer = async () => {
   try {
-    db = await open({
-      filename: dbPath,
-      driver: sqlite3.Database,
-    })
-    console.log("Database connected successfully");
+    if (process.env.NODE_ENV === 'production') {
+      // Connect to PostgreSQL in production
+      const pgp = require('pg-promise')();
+      const dbConfig = {
+        connectionString: process.env.DATABASE_URL,
+        ssl: { rejectUnauthorized: false }
+      };
+      
+      db = pgp(dbConfig);
+      console.log("PostgreSQL database connected successfully");
+      
+      // Create tables if they don't exist
+      await setupPostgresDatabase();
+    } else {
+      // Use SQLite for development
+      const dbPath = path.join(__dirname, './database/twitterClone.db');
+      db = await open({
+        filename: dbPath,
+        driver: sqlite3.Database,
+      });
+      console.log("SQLite database connected successfully");
+    }
   } catch (e) {
-    console.log(`error occured :${e}`)
+    console.error(`Database connection error: ${e}`);
   }
 }
-intializeServer()
+
+// Function to set up PostgreSQL tables
+const setupPostgresDatabase = async () => {
+  try {
+    // Read the schema file
+    const schemaPath = path.join(__dirname, './database/schema_pg.sql');
+    const schema = fs.existsSync(schemaPath) 
+      ? fs.readFileSync(schemaPath, 'utf8')
+      : `
+      -- Create User Table
+      CREATE TABLE IF NOT EXISTS "User" (
+          user_id SERIAL PRIMARY KEY,
+          name TEXT NOT NULL,
+          username TEXT UNIQUE NOT NULL,
+          password TEXT NOT NULL,
+          gender TEXT CHECK(gender IN ('Male', 'Female', 'Other')) NOT NULL
+      );
+
+      -- Create Follower Table
+      CREATE TABLE IF NOT EXISTS "Follower" (
+          follower_id SERIAL PRIMARY KEY,
+          follower_user_id INTEGER NOT NULL REFERENCES "User"(user_id),
+          following_user_id INTEGER NOT NULL REFERENCES "User"(user_id)
+      );
+
+      -- Create Tweet Table
+      CREATE TABLE IF NOT EXISTS "Tweet" (
+          tweet_id SERIAL PRIMARY KEY,
+          tweet TEXT NOT NULL,
+          user_id INTEGER NOT NULL REFERENCES "User"(user_id),
+          date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Create Reply Table
+      CREATE TABLE IF NOT EXISTS "Reply" (
+          reply_id SERIAL PRIMARY KEY,
+          tweet_id INTEGER NOT NULL REFERENCES "Tweet"(tweet_id),
+          reply TEXT NOT NULL,
+          user_id INTEGER NOT NULL REFERENCES "User"(user_id),
+          date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Create Like Table
+      CREATE TABLE IF NOT EXISTS "Like" (
+          like_id SERIAL PRIMARY KEY,
+          tweet_id INTEGER NOT NULL REFERENCES "Tweet"(tweet_id),
+          user_id INTEGER NOT NULL REFERENCES "User"(user_id),
+          date_time TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+
+      -- Create Notifications Table
+      CREATE TABLE IF NOT EXISTS "Notifications" (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER REFERENCES "User"(user_id),
+          from_user_id INTEGER REFERENCES "User"(user_id),
+          tweet_id INTEGER REFERENCES "Tweet"(tweet_id),
+          type TEXT,
+          message TEXT,
+          is_read BOOLEAN DEFAULT FALSE,
+          created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+      );
+      `;
+    
+    // Execute the schema
+    await db.query(schema);
+    console.log("PostgreSQL tables created successfully");
+  } catch (error) {
+    console.error("Error creating PostgreSQL tables:", error);
+  }
+};
+
+// Initialize database connection
+initializeServer();
 
 const authenticateToken = async (request, response, next) => {
     const authHeader = request.headers['authorization'];
@@ -126,6 +221,7 @@ app.post("/login", async (req, res) => {
 
     return res.status(200).json({ message: "Login successful", token });
 });
+
 
 
 const convertToCamelCaseForTweets = (tweets) => ({
@@ -581,7 +677,7 @@ app.post("/notifications/:id/read", authenticateToken,async (request, response) 
 app.post('/follow/:userId', authenticateToken, async (request, response) => {
     const { userId } = request.params;
     const jwtToken = request.cookies.token || request.cookies.jwtToken;
-    const payload = jwt.verify(jwtToken, 'MY_SECRET_TOKEN');
+    const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
     const followerId = payload.userId;
 
     if (followerId === parseInt(userId)) {
@@ -622,7 +718,7 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
 app.post('/unfollow/:userId', authenticateToken, async (request, response) => {
     const { userId } = request.params;
     const jwtToken = request.cookies.token || request.cookies.jwtToken;
-    const payload = jwt.verify(jwtToken, 'MY_SECRET_TOKEN');
+    const payload = jwt.verify(jwtToken,process.env.JWT_SECRET);
     const followerId = payload.userId;
 
     try {
@@ -677,7 +773,7 @@ app.get('/suggestions', authenticateToken, async (request, response) => {
 // API to get following list
 app.get('/following', authenticateToken, async (request, response) => {
     const jwtToken = request.cookies.token || request.cookies.jwtToken;
-    const payload = jwt.verify(jwtToken, 'MY_SECRET_TOKEN');
+    const payload = jwt.verify(jwtToken,  process.env.JWT_SECRET);
     const userId = payload.userId;
 
     try {
@@ -697,7 +793,7 @@ app.get('/following', authenticateToken, async (request, response) => {
 // API to get followers list
 app.get('/followers', authenticateToken, async (request, response) => {
     const jwtToken = request.cookies.token || request.cookies.jwtToken;
-    const payload = jwt.verify(jwtToken, 'MY_SECRET_TOKEN');
+    const payload = jwt.verify(jwtToken,  process.env.JWT_SECRET);
     const userId = payload.userId;
 
     try {
@@ -713,5 +809,7 @@ app.get('/followers', authenticateToken, async (request, response) => {
         response.status(500).json({ error: error.message });
     }
 });
+
+console.log('Current NODE_ENV:', process.env.NODE_ENV);
 
 module.exports = app;
