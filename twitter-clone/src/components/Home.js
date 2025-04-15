@@ -92,8 +92,20 @@ function Home() {
 
         const data = await response.json();
         console.log("Likes data:", data);
-        setLikes((prev) => ({ ...prev, [tweetId]: data.likes }));
+        
+        if (data && Array.isArray(data.likes)) {
+          setLikes((prev) => ({ ...prev, [tweetId]: data.likes }));
+          if (typeof data.hasLiked === 'boolean') {
+            setLikedByUser((prev) => ({ ...prev, [tweetId]: data.hasLiked }));
+          }
+        } else if (Array.isArray(data)) {
+          setLikes((prev) => ({ ...prev, [tweetId]: data.map(like => like.name) }));
+        } else {
+          console.error("Unexpected likes data format:", data);
+          setLikes((prev) => ({ ...prev, [tweetId]: [] }));
+        }
       } catch (err) {
+        console.error("Error fetching likes:", err);
         alert(err.message);
       }
     }
@@ -113,8 +125,17 @@ function Home() {
 
         const data = await response.json();
         console.log("Replies data:", data);
-        setReplies((prev) => ({ ...prev, [tweetId]: data.replies }));
+        
+        if (data && Array.isArray(data.replies)) {
+          setReplies((prev) => ({ ...prev, [tweetId]: data.replies }));
+        } else if (Array.isArray(data)) {
+          setReplies((prev) => ({ ...prev, [tweetId]: data }));
+        } else {
+          console.error("Unexpected replies data format:", data);
+          setReplies((prev) => ({ ...prev, [tweetId]: [] }));
+        }
       } catch (err) {
+        console.error("Error fetching replies:", err);
         alert(err.message);
       }
     }
