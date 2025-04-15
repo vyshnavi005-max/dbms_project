@@ -1533,25 +1533,44 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
 app.get('/suggestions', authenticateToken, async (request, response) => {
   try {
     const { username } = request.user;
+    console.log(`User ${username} requesting suggestions`);
     
     // Get current user
     const currentUser = await dbHelpers.getUserByUsername(username);
-    if (!currentUser) return response.status(404).json({ error: 'User not found' });
+    if (!currentUser) {
+      console.log(`User ${username} not found`);
+      return response.status(404).json({ error: 'User not found' });
+    }
+    
+    console.log(`Got user with ID: ${currentUser.user_id}`);
+    
+    let suggestions = [];
     
     // Get users not followed by current user
-    const query = process.env.NODE_ENV === 'production' 
-      ? `
-        SELECT u.user_id, u.name, u.username 
-        FROM "User" u
-        WHERE u.user_id != $1
-        AND u.user_id NOT IN (
-          SELECT f.following_user_id 
-          FROM "Follower" f
-          WHERE f.follower_user_id = $1
-        )
-        LIMIT 5
-      `
-      : `
+    if (process.env.NODE_ENV === 'production') {
+      try {
+        // Use db.any for PostgreSQL
+        suggestions = await db.any(`
+          SELECT u.user_id, u.name, u.username 
+          FROM "User" u
+          WHERE u.user_id != $1
+          AND u.user_id NOT IN (
+            SELECT f.following_user_id 
+            FROM "Follower" f
+            WHERE f.follower_user_id = $1
+          )
+          LIMIT 5
+        `, [currentUser.user_id]);
+        
+        console.log(`Found ${suggestions.length} suggestions for user ${username}`);
+      } catch (pgError) {
+        console.error("PostgreSQL query error:", pgError);
+        console.error(pgError.stack);
+        suggestions = [];
+      }
+    } else {
+      // SQLite - continue using dbHelpers.execute
+      const query = `
         SELECT u.user_id, u.name, u.username 
         FROM User u
         WHERE u.user_id != ?
@@ -1562,20 +1581,21 @@ app.get('/suggestions', authenticateToken, async (request, response) => {
         )
         LIMIT 5
       `;
+      
+      const result = await dbHelpers.execute(query, [currentUser.user_id, currentUser.user_id]);
+      suggestions = Array.isArray(result) ? result : [];
+      console.log(`Found ${suggestions.length} suggestions for user ${username}`);
+    }
     
-    // Send parameters in the correct format based on the environment
-    const suggestions = await dbHelpers.execute(
-      query, 
-      process.env.NODE_ENV === 'production' 
-        ? [currentUser.user_id] 
-        : [currentUser.user_id, currentUser.user_id]
-    );
-    
-    // Return empty array if null or undefined
-    response.json(Array.isArray(suggestions) ? suggestions : []);
+    response.json(suggestions);
   } catch (error) {
     console.error('Error fetching suggestions:', error);
-    response.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error(error.stack);
+    response.status(500).json({ 
+      error: 'Internal server error', 
+      message: error.message,
+      details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+    });
   }
 });
 
