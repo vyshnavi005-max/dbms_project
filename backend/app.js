@@ -561,7 +561,7 @@ const likedNames = (data) => {
   };
 };
   
-app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
+app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
   try {
       const { username } = req.user;
       const { tweetId } = req.params;
@@ -607,14 +607,15 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
           console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
       }
       
-      // Format the response to match frontend expectations
-      const likeNames = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
+      // Format likes array to match EXACTLY what frontend expects
+      const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
+          tweetId: parseInt(tweetId),
+          name: item?.name || ''
+      })) : [];
       
-      console.log(`Response for tweet ${tweetId} likes:`, { likes: likeNames });
+      console.log(`Response for tweet ${tweetId} likes:`, formattedLikes);
       
-      return res.json({
-          likes: likeNames
-      });
+      return res.json(formattedLikes);
   } catch (error) {
       console.error("Error fetching likes:", error);
       console.error(error.stack);
@@ -633,7 +634,7 @@ const repliesNames = (item) => {
   };
 };
   
-app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
+app.get("/tweets/:tweetId/replies", authenticateToken, async (req, res) => {
   try {
       const { username } = req.user;
       const { tweetId } = req.params;
@@ -681,17 +682,18 @@ app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
           console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
       }
       
-      // Format the response - map to the structure expected by frontend
+      // Format replies to match EXACTLY what the frontend expects
       const formattedReplies = Array.isArray(replies) 
           ? replies.map(item => ({
+              tweetId: parseInt(tweetId),
               name: item?.name || '',
               reply: item?.reply || ''
           }))
           : [];
       
-      console.log(`Response for tweet ${tweetId} replies:`, { replies: formattedReplies });
+      console.log(`Response for tweet ${tweetId} replies:`, formattedReplies);
       
-      return res.json({ replies: formattedReplies });
+      return res.json(formattedReplies);
   } catch (error) {
       console.error("Error fetching replies:", error);
       console.error(error.stack);
@@ -1769,26 +1771,48 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             }
         }
         
+        // Insert a dummy notification if none exist (for testing)
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                const notificationCount = await db.one(`
+                    SELECT COUNT(*) as count FROM "Notifications" WHERE user_id = $1
+                `, [user.user_id]);
+                
+                if (parseInt(notificationCount.count) === 0) {
+                    console.log("No notifications found, inserting test notification");
+                    await db.none(`
+                        INSERT INTO "Notifications" 
+                        (user_id, from_user_id, type, message, is_read, created_at) 
+                        VALUES ($1, $1, 'welcome', 'Welcome to Twitter Clone!', false, CURRENT_TIMESTAMP)
+                    `, [user.user_id]);
+                }
+            } catch (dummyError) {
+                console.error("Error inserting dummy notification:", dummyError);
+            }
+        }
+        
         let notifications = [];
         
         if (process.env.NODE_ENV === 'production') {
             try {
-                // Use direct PostgreSQL query with db.any
                 console.log("Using PostgreSQL query for notifications");
                 notifications = await db.any(`
                     SELECT 
-                        n.id as notification_id, 
-                        n.message as content, 
-                        TO_CHAR(COALESCE(n.created_at, CURRENT_TIMESTAMP), 'MM/DD/YYYY, HH12:MI:SS AM') as date_time,
-                        n.is_read, 
-                        u.username as triggered_by_username 
+                        n.id, 
+                        n.message,
+                        n.type,
+                        n.tweet_id,
+                        u.username as triggered_by_username,
+                        TO_CHAR(n.created_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') as created_at,
+                        n.is_read
                     FROM "Notifications" n
                     LEFT JOIN "User" u ON n.from_user_id = u.user_id
                     WHERE n.user_id = $1
                     ORDER BY n.created_at DESC NULLS LAST
+                    LIMIT 10
                 `, [user.user_id]);
                 
-                console.log(`Found ${notifications.length} notifications for user ${username} (PostgreSQL)`);
+                console.log(`Found ${notifications.length} notifications for ${username}`);
             } catch (pgError) {
                 console.error("PostgreSQL notifications query error:", pgError);
                 console.error(pgError.stack);
@@ -1800,15 +1824,18 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             try {
                 const query = `
                     SELECT 
-                        n.id as notification_id, 
-                        n.message as content, 
-                        strftime('%m/%d/%Y, %H:%M:%S', COALESCE(n.date_time, datetime('now'))) as date_time,
-                        n.is_read, 
-                        u.username as triggered_by_username 
+                        n.id, 
+                        n.message,
+                        n.type,
+                        n.tweet_id,
+                        u.username as triggered_by_username,
+                        datetime(n.date_time) as created_at,
+                        n.is_read 
                     FROM Notifications n
                     LEFT JOIN User u ON n.from_user_id = u.user_id
                     WHERE n.user_id = ?
                     ORDER BY n.date_time DESC
+                    LIMIT 10
                 `;
                 
                 const result = await dbHelpers.execute(query, [user.user_id]);
@@ -1821,24 +1848,20 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             }
         }
         
-        // Format notifications - ensure they match the expected frontend format
-        const formattedNotifications = notifications.map(n => {
-            // Using a properly formatted string date that JavaScript can handle
-            const dateStr = n?.date_time || new Date().toLocaleString();
-            
-            return {
-                notification_id: n?.notification_id || 0, 
-                content: n?.content || n?.message || '',
-                date_time: dateStr, // Use the formatted date string directly
-                is_read: !!n?.is_read,
-                triggered_by_username: n?.triggered_by_username || ''
-            };
-        });
+        // Format exactly as expected by frontend
+        const formattedNotifications = notifications.map(n => ({
+            id: n?.id || 0,
+            message: n?.message || 'New notification',
+            type: n?.type || 'info',
+            tweet_id: n?.tweet_id || null,
+            created_at: n?.created_at || new Date().toISOString(),
+            is_read: !!n?.is_read,
+            triggered_by_username: n?.triggered_by_username || username
+        }));
         
-        console.log(`Returning ${formattedNotifications.length} notifications with formatted dates`);
-        if (formattedNotifications.length > 0) {
-            console.log("Sample notification date:", formattedNotifications[0].date_time);
-        }
+        console.log("Sending notifications to client, sample:", 
+            formattedNotifications.length > 0 ? 
+            JSON.stringify(formattedNotifications[0]) : "No notifications");
         
         return response.json(formattedNotifications);
     } catch (error) {
