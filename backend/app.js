@@ -11,25 +11,33 @@ const dotenv = require('dotenv')
 const fs = require('fs')
 dotenv.config();
 
-app.options('*', (req, res) => {
-    const allowedOrigin = process.env.NODE_ENV === 'production'
-        ? 'https://vyshnavi005-max.github.io'
-        : 'http://localhost:3001';
-        
-    res.header("Access-Control-Allow-Origin", allowedOrigin);
-    res.header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, OPTIONS");
-    res.header("Access-Control-Allow-Headers", "Content-Type, Authorization");
-    res.header("Access-Control-Allow-Credentials", "true"); 
-    res.sendStatus(204);
-});
+// Set up CORS properly for all endpoints
+// Define allowed origins
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+    ? ['https://vyshnavi005-max.github.io'] 
+    : ['http://localhost:3001'];
 
-
+// Use a more flexible CORS configuration
 app.use(cors({
-    origin: process.env.NODE_ENV === 'production' 
-        ? 'https://vyshnavi005-max.github.io' 
-        : 'http://localhost:3001',
+    origin: function(origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl requests)
+        if (!origin) return callback(null, true);
+        
+        if (allowedOrigins.indexOf(origin) === -1) {
+            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
+            return callback(new Error(msg), false);
+        }
+        return callback(null, true);
+    },
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization']
 }));
+
+// Handle OPTIONS requests explicitly
+app.options('*', (req, res) => {
+    res.status(204).end();
+});
 
 app.use(express.json())
 app.use(cookieParser());
@@ -140,18 +148,21 @@ const setupPostgresDatabase = async () => {
 initializeServer();
 
 const authenticateToken = async (request, response, next) => {
-    const authHeader = request.headers['authorization'];
-    const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-    const cookieToken = request.cookies.token || request.cookies.jwtToken;
-
-    const jwtToken = bearerToken || cookieToken;
-
-    if (!jwtToken) {
-        console.log("No JWT token found in headers or cookies");
-        return response.status(401).send("Invalid JWT Token");
-    }
-
     try {
+        // Extract token from Authorization header or cookies
+        const authHeader = request.headers['authorization'];
+        const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+        const cookieToken = request.cookies.token || request.cookies.jwtToken;
+        
+        // Choose which token to use (prefer header token over cookie token)
+        const jwtToken = bearerToken || cookieToken;
+        
+        if (!jwtToken) {
+            console.log("No JWT token found in headers or cookies");
+            return response.status(401).send("Invalid JWT Token");
+        }
+        
+        // Verify the token
         const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
         
         // Get user details from database based on database type
@@ -165,13 +176,16 @@ const authenticateToken = async (request, response, next) => {
         }
         
         if (!user) {
+            console.log("User not found in database:", payload.username);
             return response.status(401).send("Invalid JWT Token");
         }
         
+        // Add user to request object
         request.user = {
             userId: user.user_id,
             username: user.username
         };
+        
         next();
     } catch (err) {
         console.log("JWT verification error:", err.message);
@@ -241,45 +255,62 @@ app.post("/register", async (request, response) => {
     }
 });
 
-app.post("/login", async (req, res) => {
-    try {
-        const { username, password } = req.body;
-        
-        // Different query based on database type
-        let user;
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            user = await db.oneOrNone("SELECT * FROM \"User\" WHERE username = $1", [username]);
-        } else {
-            // SQLite query
-            user = await db.get("SELECT * FROM User WHERE username = ?", [username]);
-        }
-        
-        if (!user) {
-            return res.status(400).json({ error: "Invalid username or password" });
-        }
-
-        const passwordMatch = await bcrypt.compare(password, user.password);
-        if (!passwordMatch) {
-            return res.status(400).json({ error: "Invalid username or password" });
-        }
-
-        const token = jwt.sign({ 
-            username: user.username,
-            userId: user.user_id 
-        }, process.env.JWT_SECRET, { expiresIn: "1h" });
-
-        res.cookie("token", token, { 
-            httpOnly: true, 
-            secure: process.env.NODE_ENV === 'production',
-            sameSite: process.env.NODE_ENV === 'production' ? 'None' : 'Lax'
+// Login endpoint
+app.post("/login", (request, response) => {
+    const { username, password } = request.body;
+    
+    // Determine which database query to use based on environment
+    const query = process.env.NODE_ENV === 'production' 
+        ? 'SELECT * FROM "User" WHERE username = $1'
+        : 'SELECT * FROM User WHERE username = ?';
+    
+    // Execute the appropriate query
+    const dbMethod = process.env.NODE_ENV === 'production' ? db.oneOrNone : db.get;
+    dbMethod(query, [username])
+        .then(user => {
+            if (!user) {
+                return response.status(400).json({ message: "Invalid username or password" });
+            }
+            
+            // Compare the password
+            bcrypt.compare(password, user.password, (err, result) => {
+                if (err || !result) {
+                    return response.status(400).json({ message: "Invalid username or password" });
+                }
+                
+                // Create JWT token
+                const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { 
+                    expiresIn: '24h'
+                });
+                
+                // Set up cookie options
+                const cookieOptions = {
+                    httpOnly: true,
+                    secure: process.env.NODE_ENV === 'production',
+                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+                    path: '/',
+                    maxAge: 24 * 60 * 60 * 1000 // 24 hours
+                };
+                
+                // Set JWT in cookie
+                response.cookie('token', token, cookieOptions);
+                
+                // Send token in response body as well
+                return response.status(200).json({
+                    message: "Login successful",
+                    user: {
+                        username: user.username,
+                        userId: user.user_id,
+                        profilePic: user.profile_pic
+                    },
+                    token: token
+                });
+            });
+        })
+        .catch(error => {
+            console.error("Login error:", error);
+            response.status(500).json({ message: "Server error during login" });
         });
-
-        return res.status(200).json({ message: "Login successful", token });
-    } catch (error) {
-        console.error("Login error:", error);
-        return res.status(500).json({ error: "Server error" });
-    }
 });
 
 
@@ -936,273 +967,30 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             if (!user) return response.status(400).send("User not found");
             
             notifications = await db.any(`
-                SELECT * 
-                FROM "Notifications" 
-                WHERE user_id = $1 
-                ORDER BY created_at DESC
+                SELECT n.notification_id, n.content, n.date_time, n.is_read, u.username as triggered_by_username 
+                FROM "Notification" n
+                LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
+                WHERE n.user_id = $1
+                ORDER BY n.date_time DESC
             `, [user.user_id]);
         } else {
-            // SQLite queries
-            user = await db.get("SELECT user_id FROM User WHERE username = ?", [username]);
-            if (!user) return response.status(400).send("User not found");
+            // SQLite query
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
             
             const getNotificationsQuery = `
-                SELECT * 
-                FROM notifications 
-                WHERE user_id = ${user.user_id} 
-                ORDER BY created_at DESC
+                SELECT n.notification_id, n.content, n.date_time, n.is_read, u.username as triggered_by_username 
+                FROM Notification n
+                LEFT JOIN User u ON n.triggered_by_user_id = u.user_id
+                WHERE n.user_id = ?
+                ORDER BY n.date_time DESC
             `;
-            notifications = await db.all(getNotificationsQuery);
+            notifications = await db.all(getNotificationsQuery, [user.user_id]);
         }
         
-        response.json(notifications);
+        return response.json(notifications);
     } catch (error) {
         console.error("Error fetching notifications:", error);
-        response.status(500).json({ error: "Internal server error" });
+        return response.status(500).send("Server error");
     }
 });
-
-app.post("/notifications/:id/read", authenticateToken, async (request, response) => {
-    try {
-        const { id } = request.params;
-        
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            await db.none('UPDATE "Notifications" SET is_read = true WHERE id = $1', [id]);
-        } else {
-            // SQLite query
-            await db.run(`UPDATE notifications SET is_read = 1 WHERE id = ${id}`);
-        }
-
-        response.send({ message: "Notification marked as read" });
-    } catch (error) {
-        console.error("Error marking notification as read:", error);
-        response.status(500).json({ error: "Internal server error" });
-    }
-});
-
-// API to follow a user
-app.post('/follow/:userId', authenticateToken, async (request, response) => {
-    try {
-        const { userId } = request.params;
-        const jwtToken = request.cookies.token || request.cookies.jwtToken;
-        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
-        const followerId = payload.userId;
-
-        if (followerId === parseInt(userId)) {
-            return response.status(400).json({ error: "You cannot follow yourself" });
-        }
-
-        // Check if already following
-        let existingFollow;
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            existingFollow = await db.oneOrNone(
-                'SELECT * FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
-                [followerId, userId]
-            );
-        } else {
-            // SQLite query
-            existingFollow = await db.get(
-                `SELECT * FROM Follower WHERE follower_user_id = ? AND following_user_id = ?`,
-                [followerId, userId]
-            );
-        }
-
-        if (existingFollow) {
-            return response.status(400).json({ error: "Already following this user" });
-        }
-
-        // Add follow relationship
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            await db.none(
-                'INSERT INTO "Follower" (follower_user_id, following_user_id) VALUES ($1, $2)',
-                [followerId, userId]
-            );
-
-            // Add notification
-            await db.none(
-                'INSERT INTO "Notifications" (user_id, from_user_id, type, message) VALUES ($1, $2, $3, $4)',
-                [userId, followerId, 'follow', `@${payload.username} started following you`]
-            );
-        } else {
-            // SQLite query
-            await db.run(
-                `INSERT INTO Follower (follower_user_id, following_user_id) VALUES (?, ?)`,
-                [followerId, userId]
-            );
-
-            // Add notification
-            await db.run(
-                `INSERT INTO Notifications (user_id, from_user_id, type, message) VALUES (?, ?, 'follow', ?)`,
-                [userId, followerId, `@${payload.username} started following you`]
-            );
-        }
-
-        response.json({ message: "Followed successfully" });
-    } catch (error) {
-        console.error("Follow error:", error);
-        response.status(500).json({ error: error.message });
-    }
-});
-
-// API to unfollow a user
-app.post('/unfollow/:userId', authenticateToken, async (request, response) => {
-    try {
-        const { userId } = request.params;
-        const jwtToken = request.cookies.token || request.cookies.jwtToken;
-        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
-        const followerId = payload.userId;
-
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            await db.none(
-                'DELETE FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
-                [followerId, userId]
-            );
-        } else {
-            // SQLite query
-            await db.run(
-                `DELETE FROM Follower WHERE follower_user_id = ? AND following_user_id = ?`,
-                [followerId, userId]
-            );
-        }
-        
-        response.json({ message: "Unfollowed successfully" });
-    } catch (error) {
-        console.error("Unfollow error:", error);
-        response.status(500).json({ error: error.message });
-    }
-});
-
-// API to get user suggestions
-app.get('/suggestions', authenticateToken, async (request, response) => {
-    try {
-        const { username } = request.user;
-        let suggestions;
-        
-        if (process.env.NODE_ENV === 'production') {
-            // First get the user's ID from their username (PostgreSQL)
-            const user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
-            if (!user) {
-                return response.status(401).json({ error: 'User not found' });
-            }
-
-            // PostgreSQL query
-            suggestions = await db.any(`
-                SELECT u.user_id, u.name, u.username 
-                FROM "User" u
-                WHERE u.user_id != $1 
-                AND u.user_id NOT IN (
-                    SELECT following_user_id 
-                    FROM "Follower" 
-                    WHERE follower_user_id = $1
-                )
-                ORDER BY RANDOM()
-                LIMIT 5
-            `, [user.user_id]);
-        } else {
-            // First get the user's ID from their username (SQLite)
-            const user = await db.get('SELECT user_id FROM User WHERE username = ?', [username]);
-            if (!user) {
-                return response.status(401).json({ error: 'User not found' });
-            }
-
-            const userId = user.user_id;
-
-            // SQLite query
-            suggestions = await db.all(`
-                SELECT u.user_id, u.name, u.username 
-                FROM User u
-                WHERE u.user_id != ? 
-                AND u.user_id NOT IN (
-                    SELECT following_user_id 
-                    FROM Follower 
-                    WHERE follower_user_id = ?
-                )
-                ORDER BY RANDOM()
-                LIMIT 5
-            `, [userId, userId]);
-        }
-
-        if (!suggestions || suggestions.length === 0) {
-            return response.status(200).json([]);
-        }
-
-        response.json(suggestions);
-    } catch (error) {
-        console.error('Error in suggestions endpoint:', error);
-        response.status(500).json({ error: 'Internal server error' });
-    }
-});
-
-// API to get following list
-app.get('/following', authenticateToken, async (request, response) => {
-    try {
-        const jwtToken = request.cookies.token || request.cookies.jwtToken;
-        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
-        const userId = payload.userId;
-        let following;
-
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            following = await db.any(`
-                SELECT u.user_id, u.name, u.username 
-                FROM "User" u
-                JOIN "Follower" f ON u.user_id = f.following_user_id
-                WHERE f.follower_user_id = $1
-            `, [userId]);
-        } else {
-            // SQLite query
-            following = await db.all(`
-                SELECT u.user_id, u.name, u.username 
-                FROM User u
-                JOIN Follower f ON u.user_id = f.following_user_id
-                WHERE f.follower_user_id = ?
-            `, [userId]);
-        }
-
-        response.json(following);
-    } catch (error) {
-        console.error('Error getting following list:', error);
-        response.status(500).json({ error: error.message });
-    }
-});
-
-// API to get followers list
-app.get('/followers', authenticateToken, async (request, response) => {
-    try {
-        const jwtToken = request.cookies.token || request.cookies.jwtToken;
-        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
-        const userId = payload.userId;
-        let followers;
-
-        if (process.env.NODE_ENV === 'production') {
-            // PostgreSQL query
-            followers = await db.any(`
-                SELECT u.user_id, u.name, u.username 
-                FROM "User" u
-                JOIN "Follower" f ON u.user_id = f.follower_user_id
-                WHERE f.following_user_id = $1
-            `, [userId]);
-        } else {
-            // SQLite query
-            followers = await db.all(`
-                SELECT u.user_id, u.name, u.username 
-                FROM User u
-                JOIN Follower f ON u.user_id = f.follower_user_id
-                WHERE f.following_user_id = ?
-            `, [userId]);
-        }
-
-        response.json(followers);
-    } catch (error) {
-        console.error('Error getting followers list:', error);
-        response.status(500).json({ error: error.message });
-    }
-});
-
-console.log('Current NODE_ENV:', process.env.NODE_ENV);
-
-module.exports = app;
