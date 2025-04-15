@@ -373,35 +373,59 @@ const likedNames = (data) => {
   };
   
   app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
-    const { username } = req.user;
-    const { tweetId } = req.params;
-  
     try {
-      const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`;
-      const user = await db.get(getUserIdQuery, [username]);
-  
-      const getTweets = `
-        SELECT u.name
-        FROM like l
-        JOIN user u ON l.user_id = u.user_id
-        WHERE l.tweet_id = ?
-          AND l.tweet_id IN (
-            SELECT tweet_id
-            FROM tweet
-            WHERE user_id IN (
-              SELECT following_user_id
-              FROM follower
-              WHERE follower_user_id = ?
-            )
-          )
-      `;
-  
-      const dbResponse = await db.all(getTweets, [tweetId, user.user_id]);
-  
-      return res.send(likedNames(dbResponse));
+        const { username } = req.user;
+        const { tweetId } = req.params;
+        let user, dbResponse;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return res.status(400).send("User not found");
+            
+            dbResponse = await db.any(`
+                SELECT u.name
+                FROM "Like" l
+                JOIN "User" u ON l.user_id = u.user_id
+                WHERE l.tweet_id = $1
+                  AND l.tweet_id IN (
+                    SELECT tweet_id
+                    FROM "Tweet"
+                    WHERE user_id IN (
+                      SELECT following_user_id
+                      FROM "Follower"
+                      WHERE follower_user_id = $2
+                    )
+                  )
+            `, [tweetId, user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return res.status(400).send("User not found");
+            
+            const getTweets = `
+                SELECT u.name
+                FROM Like l
+                JOIN User u ON l.user_id = u.user_id
+                WHERE l.tweet_id = ?
+                  AND l.tweet_id IN (
+                    SELECT tweet_id
+                    FROM Tweet
+                    WHERE user_id IN (
+                      SELECT following_user_id
+                      FROM Follower
+                      WHERE follower_user_id = ?
+                    )
+                  )
+            `;
+            dbResponse = await db.all(getTweets, [tweetId, user.user_id]);
+        }
+        
+        return res.send(likedNames(dbResponse));
     } catch (error) {
-      console.error("Error fetching likes:", error);
-      return res.status(500).send("Server error");
+        console.error("Error fetching likes:", error);
+        return res.status(500).send("Server error");
     }
   });
   
@@ -410,35 +434,59 @@ const repliesNames = (item) => {
   };
   
   app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
-    const { username } = req.user;
-    const { tweetId } = req.params;
-  
     try {
-      const getUserIdQuery = `SELECT user_id FROM user WHERE username = ?`;
-      const user = await db.get(getUserIdQuery, [username]);
-  
-      const getRepliesQuery = `
-        SELECT u.name, r.reply
-        FROM reply r
-        JOIN user u ON r.user_id = u.user_id
-        WHERE r.tweet_id = ?
-          AND r.tweet_id IN (
-            SELECT tweet_id
-            FROM tweet
-            WHERE user_id IN (
-              SELECT following_user_id
-              FROM follower
-              WHERE follower_user_id = ?
-            )
-          )
-      `;
-  
-      const dbResponse = await db.all(getRepliesQuery, [tweetId, user.user_id]);
-  
-      return res.send({ replies: dbResponse.map(repliesNames) });
+        const { username } = req.user;
+        const { tweetId } = req.params;
+        let user, dbResponse;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return res.status(400).send("User not found");
+            
+            dbResponse = await db.any(`
+                SELECT u.name, r.reply
+                FROM "Reply" r
+                JOIN "User" u ON r.user_id = u.user_id
+                WHERE r.tweet_id = $1
+                  AND r.tweet_id IN (
+                    SELECT tweet_id
+                    FROM "Tweet"
+                    WHERE user_id IN (
+                      SELECT following_user_id
+                      FROM "Follower"
+                      WHERE follower_user_id = $2
+                    )
+                  )
+            `, [tweetId, user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return res.status(400).send("User not found");
+            
+            const getRepliesQuery = `
+                SELECT u.name, r.reply
+                FROM Reply r
+                JOIN User u ON r.user_id = u.user_id
+                WHERE r.tweet_id = ?
+                  AND r.tweet_id IN (
+                    SELECT tweet_id
+                    FROM Tweet
+                    WHERE user_id IN (
+                      SELECT following_user_id
+                      FROM Follower
+                      WHERE follower_user_id = ?
+                    )
+                  )
+            `;
+            dbResponse = await db.all(getRepliesQuery, [tweetId, user.user_id]);
+        }
+        
+        return res.send({ replies: dbResponse.map(repliesNames) });
     } catch (error) {
-      console.error("Error fetching replies:", error);
-      return res.status(500).send("Server error");
+        console.error("Error fetching replies:", error);
+        return res.status(500).send("Server error");
     }
   });
   
@@ -471,10 +519,15 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
                     [user.user_id, tweetId]
                 );
                 
-                await db.none(
-                    'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message) VALUES ($1, $2, $3, $4, $5)',
-                    [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`]
-                );
+                try {
+                    await db.none(
+                        'INSERT INTO "Notification" (user_id, triggered_by_user_id, tweet_id, type, content, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
+                        [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`, false]
+                    );
+                } catch (notifError) {
+                    console.error("Error creating notification:", notifError);
+                    // Continue even if notification creation fails
+                }
             }
             
             // Get updated likes list with usernames
@@ -508,11 +561,16 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
             } else {
                 await db.run(`INSERT INTO Like (user_id, tweet_id) VALUES (?, ?)`, [user.user_id, tweetId]);
                 
-                await db.run(
-                    `INSERT INTO notifications (user_id, from_user_id, tweet_id, type, message) 
-                    VALUES (?, ?, ?, 'like', ?)`,
-                    [tweet.user_id, user.user_id, tweetId, `${username} liked your tweet.`]
-                );
+                try {
+                    await db.run(
+                        `INSERT INTO Notification (user_id, triggered_by_user_id, tweet_id, type, content, is_read) 
+                        VALUES (?, ?, ?, ?, ?, ?)`,
+                        [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`, 0]
+                    );
+                } catch (notifError) {
+                    console.error("Error creating notification:", notifError);
+                    // Continue even if notification creation fails
+                }
             }
             
             // Get updated likes list with usernames
@@ -564,10 +622,15 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
                 [user.user_id, tweetId, replyText]
             );
             
-            await db.none(
-                'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message) VALUES ($1, $2, $3, $4, $5)',
-                [tweet.user_id, user.user_id, tweetId, 'reply', `${username} replied: "${replyText}"`]
-            );
+            try {
+                await db.none(
+                    'INSERT INTO "Notification" (user_id, triggered_by_user_id, tweet_id, type, content, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
+                    [tweet.user_id, user.user_id, tweetId, 'reply', `${username} replied: "${replyText}"`, false]
+                );
+            } catch (notifError) {
+                console.error("Error creating notification:", notifError);
+                // Continue even if notification creation fails
+            }
             
             // Get updated replies list with names
             const replies = await db.any(`
@@ -606,11 +669,16 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
             
             await db.run(`INSERT INTO Reply (user_id, tweet_id, reply) VALUES (?, ?, ?)`, [user.user_id, tweetId, replyText]);
             
-            await db.run(
-                `INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message) 
-                 VALUES (?, ?, ?, 'reply', ?)`,
-                [tweet.user_id, user.user_id, tweetId, `${username} replied: "${replyText}"`]
-            );
+            try {
+                await db.run(
+                    `INSERT INTO Notification (user_id, triggered_by_user_id, tweet_id, type, content, is_read) 
+                     VALUES (?, ?, ?, ?, ?, ?)`,
+                    [tweet.user_id, user.user_id, tweetId, 'reply', `${username} replied: "${replyText}"`, 0]
+                );
+            } catch (notifError) {
+                console.error("Error creating notification:", notifError);
+                // Continue even if notification creation fails
+            }
             
             // Get updated replies list with names
             const repliesQuery = `
@@ -655,26 +723,36 @@ app.get('/profile', authenticateToken, async (req, res) => {
             }
 
             // Get follower and following counts
-            followers = await db.one('SELECT COUNT(*) as count FROM "Follower" WHERE following_user_id = $1', [user.user_id]);
-            following = await db.one('SELECT COUNT(*) as count FROM "Follower" WHERE follower_user_id = $1', [user.user_id]);
+            const followersResult = await db.one('SELECT COUNT(*) as count FROM "Follower" WHERE following_user_id = $1', [user.user_id]);
+            const followingResult = await db.one('SELECT COUNT(*) as count FROM "Follower" WHERE follower_user_id = $1', [user.user_id]);
+            
+            followers = parseInt(followersResult.count) || 0;
+            following = parseInt(followingResult.count) || 0;
         } else {
             // SQLite queries
-            user = await db.get('SELECT user_id, name, username FROM User WHERE username = ?', [username]);
+            const getUserIdQuery = 'SELECT user_id, name, username FROM User WHERE username = ?';
+            user = await db.get(getUserIdQuery, [username]);
             
             if (!user) {
                 return res.status(404).json({ error: 'User not found' });
             }
 
             // Get follower and following counts
-            followers = await db.get('SELECT COUNT(*) as count FROM Follower WHERE following_user_id = ?', [user.user_id]);
-            following = await db.get('SELECT COUNT(*) as count FROM Follower WHERE follower_user_id = ?', [user.user_id]);
+            const getFollowersCountQuery = 'SELECT COUNT(*) as count FROM Follower WHERE following_user_id = ?';
+            const getFollowingCountQuery = 'SELECT COUNT(*) as count FROM Follower WHERE follower_user_id = ?';
+            
+            const followersResult = await db.get(getFollowersCountQuery, [user.user_id]);
+            const followingResult = await db.get(getFollowingCountQuery, [user.user_id]);
+            
+            followers = followersResult ? followersResult.count : 0;
+            following = followingResult ? followingResult.count : 0;
         }
 
         res.json({
             username: user.username,
             name: user.name,
-            followersCount: followers.count,
-            followingCount: following.count
+            followersCount: followers,
+            followingCount: following
         });
     } catch (error) {
         console.error('Error in profile endpoint:', error);
@@ -682,28 +760,80 @@ app.get('/profile', authenticateToken, async (req, res) => {
     }
 });
   
-app.get("/user/followers/",authenticateToken,async(request,response)=>{
-   const { username } = request.user;
-  const getUserIdQuery = `SELECT user_id FROM User WHERE username ='${username}'`;
-  const user = await db.get(getUserIdQuery);
-    const getNamesQuery=`
-    select User.name
-    from User join Follower on User.user_id = Follower.follower_user_id 
-    where Follower.following_user_id =${user.user_id}` 
-    const dbResponse = await db.all(getNamesQuery)
-    response.send(dbResponse.map(convertToCamelCaseForFollowers));
-})
-app.get("/user/following/",authenticateToken,async(request,response)=>{
-   const { username } = request.user;
-  const getUserIdQuery = `SELECT user_id FROM User WHERE username ='${username}'`;
-  const user = await db.get(getUserIdQuery);
-    const getNamesQuery=`
-    select User.name
-    from User join Follower on User.user_id = Follower.following_user_id
-    where Follower.follower_user_id =${user.user_id}` 
-    const dbResponse = await db.all(getNamesQuery)
-    response.send(dbResponse.map(convertToCamelCaseForFollowers));
-})
+app.get("/user/followers/", authenticateToken, async (request, response) => {
+    try {
+        const { username } = request.user;
+        let user, followers;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            followers = await db.any(`
+                SELECT u.name
+                FROM "User" u
+                JOIN "Follower" f ON u.user_id = f.follower_user_id
+                WHERE f.following_user_id = $1
+            `, [user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            const getNamesQuery = `
+                SELECT User.name
+                FROM User JOIN Follower ON User.user_id = Follower.follower_user_id
+                WHERE Follower.following_user_id = ?
+            `;
+            followers = await db.all(getNamesQuery, [user.user_id]);
+        }
+        
+        response.send(followers.map(convertToCamelCaseForFollowers));
+    } catch (error) {
+        console.error("Error fetching followers:", error);
+        response.status(500).send("Internal Server Error");
+    }
+});
+
+app.get("/user/following/", authenticateToken, async (request, response) => {
+    try {
+        const { username } = request.user;
+        let user, following;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            following = await db.any(`
+                SELECT u.name
+                FROM "User" u
+                JOIN "Follower" f ON u.user_id = f.following_user_id
+                WHERE f.follower_user_id = $1
+            `, [user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            const getNamesQuery = `
+                SELECT User.name
+                FROM User JOIN Follower ON User.user_id = Follower.following_user_id
+                WHERE Follower.follower_user_id = ?
+            `;
+            following = await db.all(getNamesQuery, [user.user_id]);
+        }
+        
+        response.send(following.map(convertToCamelCaseForFollowers));
+    } catch (error) {
+        console.error("Error fetching following:", error);
+        response.status(500).send("Internal Server Error");
+    }
+});
+
 const convertsnakecaseToCamelCase=(tweetDetails)=>{
     return {
         tweetId:tweetDetails.tweet_id,
@@ -782,39 +912,88 @@ const convertToCamelCaseForReplies=(replies)=>({
     reply:replies.reply
 })
 app.get("/user/tweets/replies/", authenticateToken, async (request, response) => {
-    const { username } = request.user;
-    const getUserIdQuery = `SELECT user_id FROM User WHERE username = '${username}'`;
-    const user = await db.get(getUserIdQuery);
-  
-    const getOwnTweetRepliesQuery = `
-      SELECT t.tweet_id, u.name, r.reply 
-      FROM Tweet t 
-      JOIN Reply r ON t.tweet_id = r.tweet_id 
-      JOIN User u ON r.user_id = u.user_id 
-      WHERE t.user_id = ${user.user_id}
-    `;
-    const dbResponse = await db.all(getOwnTweetRepliesQuery);
-    response.send(dbResponse.map((eachItem)=>convertToCamelCaseForReplies(eachItem)));
-  });
-  const convertToCamelCaseForLikes=(replies)=>({
+    try {
+        const { username } = request.user;
+        let user, replies;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            replies = await db.any(`
+                SELECT t.tweet_id, u.name, r.reply 
+                FROM "Tweet" t 
+                JOIN "Reply" r ON t.tweet_id = r.tweet_id 
+                JOIN "User" u ON r.user_id = u.user_id 
+                WHERE t.user_id = $1
+            `, [user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            const getOwnTweetRepliesQuery = `
+                SELECT t.tweet_id, u.name, r.reply 
+                FROM Tweet t 
+                JOIN Reply r ON t.tweet_id = r.tweet_id 
+                JOIN User u ON r.user_id = u.user_id 
+                WHERE t.user_id = ?
+            `;
+            replies = await db.all(getOwnTweetRepliesQuery, [user.user_id]);
+        }
+        
+        response.send(replies.map((eachItem) => convertToCamelCaseForReplies(eachItem)));
+    } catch (error) {
+        console.error("Error fetching tweet replies:", error);
+        response.status(500).send("Internal Server Error");
+    }
+});
+
+const convertToCamelCaseForLikes=(replies)=>({
     tweetId:replies.tweet_id,
     name:replies.name
 })
-  app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
-    const { username } = request.user;
-    const getUserIdQuery = `SELECT user_id FROM User WHERE username = '${username}'`;
-    const user = await db.get(getUserIdQuery);
-  
-    const getOwnTweetLikesQuery = `
-      SELECT t.tweet_id, u.name 
-      FROM Tweet t 
-      JOIN Like l ON t.tweet_id = l.tweet_id 
-      JOIN User u ON l.user_id = u.user_id 
-      WHERE t.user_id = ${user.user_id}
-    `;
-    const dbResponse = await db.all(getOwnTweetLikesQuery);
-    response.send(dbResponse.map((eachItem)=>convertToCamelCaseForLikes(eachItem)));
-  });
+app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
+    try {
+        const { username } = request.user;
+        let user, likes;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries
+            user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            likes = await db.any(`
+                SELECT t.tweet_id, u.name 
+                FROM "Tweet" t 
+                JOIN "Like" l ON t.tweet_id = l.tweet_id 
+                JOIN "User" u ON l.user_id = u.user_id 
+                WHERE t.user_id = $1
+            `, [user.user_id]);
+        } else {
+            // SQLite queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
+            
+            const getOwnTweetLikesQuery = `
+                SELECT t.tweet_id, u.name 
+                FROM Tweet t 
+                JOIN Like l ON t.tweet_id = l.tweet_id 
+                JOIN User u ON l.user_id = u.user_id 
+                WHERE t.user_id = ?
+            `;
+            likes = await db.all(getOwnTweetLikesQuery, [user.user_id]);
+        }
+        
+        response.send(likes.map((eachItem) => convertToCamelCaseForLikes(eachItem)));
+    } catch (error) {
+        console.error("Error fetching tweet likes:", error);
+        response.status(500).send("Internal Server Error");
+    }
+});
   
     
 
@@ -894,7 +1073,7 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
             user = await db.get("SELECT user_id FROM User WHERE username = ?", [username]);
             if (!user) return response.status(400).send("User not found");
             
-            getTweets = `
+            const getTweetsQuery = `
                 SELECT
                     t.tweet_id AS tweet_id,
                     t.tweet, 
@@ -904,10 +1083,10 @@ app.get("/user/tweets/", authenticateToken, async (request, response) => {
                 FROM Tweet t
                 LEFT JOIN Like l ON t.tweet_id = l.tweet_id
                 LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
-                WHERE t.user_id = ${user.user_id}
+                WHERE t.user_id = ?
                 GROUP BY t.tweet_id
                 ORDER BY t.date_time DESC;`;
-            dbResponse = await db.all(getTweets);
+            dbResponse = await db.all(getTweetsQuery, [user.user_id]);
         }
         
         return response.send(dbResponse.map(convertsnakecaseToCamelCase));
@@ -966,29 +1145,59 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             user = await db.oneOrNone('SELECT user_id FROM "User" WHERE username = $1', [username]);
             if (!user) return response.status(400).send("User not found");
             
-            notifications = await db.any(`
-                SELECT n.notification_id, n.content, n.date_time, n.is_read, u.username as triggered_by_username 
-                FROM "Notification" n
-                LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
-                WHERE n.user_id = $1
-                ORDER BY n.date_time DESC
-            `, [user.user_id]);
+            try {
+                notifications = await db.any(`
+                    SELECT n.id as notification_id, n.message as content, n.created_at as date_time, 
+                           n.is_read, u.username as triggered_by_username 
+                    FROM "Notifications" n
+                    LEFT JOIN "User" u ON n.from_user_id = u.user_id
+                    WHERE n.user_id = $1
+                    ORDER BY n.created_at DESC
+                `, [user.user_id]);
+            } catch (dbError) {
+                console.error("Database error (trying fallback query):", dbError);
+                // Fallback to alternative table structure
+                notifications = await db.any(`
+                    SELECT n.id as notification_id, n.message as content, n.created_at as date_time, 
+                           n.is_read, u.username as triggered_by_username 
+                    FROM "Notification" n
+                    LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
+                    WHERE n.user_id = $1
+                    ORDER BY n.created_at DESC
+                `, [user.user_id]);
+            }
         } else {
             // SQLite query
             const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
             user = await db.get(getUserIdQuery, [username]);
+            if (!user) return response.status(400).send("User not found");
             
-            const getNotificationsQuery = `
-                SELECT n.notification_id, n.content, n.date_time, n.is_read, u.username as triggered_by_username 
-                FROM Notification n
-                LEFT JOIN User u ON n.triggered_by_user_id = u.user_id
-                WHERE n.user_id = ?
-                ORDER BY n.date_time DESC
-            `;
-            notifications = await db.all(getNotificationsQuery, [user.user_id]);
+            try {
+                const getNotificationsQuery = `
+                    SELECT n.id as notification_id, n.message as content, n.date_time, 
+                           n.is_read, u.username as triggered_by_username 
+                    FROM Notifications n
+                    LEFT JOIN User u ON n.from_user_id = u.user_id
+                    WHERE n.user_id = ?
+                    ORDER BY n.date_time DESC
+                `;
+                notifications = await db.all(getNotificationsQuery, [user.user_id]);
+            } catch (dbError) {
+                console.error("Database error (trying fallback query):", dbError);
+                // Try alternative table structure
+                const getNotificationsQuery = `
+                    SELECT n.id as notification_id, n.content, n.date_time, 
+                           n.is_read, u.username as triggered_by_username 
+                    FROM Notification n
+                    LEFT JOIN User u ON n.triggered_by_user_id = u.user_id
+                    WHERE n.user_id = ?
+                    ORDER BY n.date_time DESC
+                `;
+                notifications = await db.all(getNotificationsQuery, [user.user_id]);
+            }
         }
         
-        return response.json(notifications);
+        return response.json(notifications || []);
     } catch (error) {
         console.error("Error fetching notifications:", error);
         return response.status(500).send("Server error");
