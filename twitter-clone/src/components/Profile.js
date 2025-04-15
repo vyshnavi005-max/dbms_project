@@ -28,43 +28,104 @@ const Profile = () => {
   useEffect(() => {
     const fetchData = async () => {
       try {
-        const [tweetsRes, followersRes, followingRes, profileRes] =
-          await Promise.all([
-            fetch(`${API_URL}/user/tweets/`, {
-              credentials: "include",
-            }),
-            fetch(`${API_URL}/user/followers/`, {
-              credentials: "include",
-            }),
-            fetch(`${API_URL}/user/following/`, {
-              credentials: "include",
-            }),
-            fetch(`${API_URL}/profile`, {
-              credentials: "include",
-            }),
-          ]);
-
-        if (
-          !tweetsRes.ok ||
-          !followersRes.ok ||
-          !followingRes.ok ||
-          !profileRes.ok
-        ) {
-          throw new Error("Something went wrong");
+        setLoading(true);
+        setError("");
+        
+        // Fetch one at a time to better handle errors
+        let tweetsData = [];
+        let followersData = [];
+        let followingData = [];
+        let profileData = { name: "", username: "" };
+        
+        try {
+          console.log("Fetching profile data");
+          const profileRes = await fetch(`${API_URL}/profile`, {
+            credentials: "include",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (!profileRes.ok) {
+            const errorText = await profileRes.text();
+            console.error("Profile fetch error:", errorText);
+            throw new Error(`Profile error: ${profileRes.status}`);
+          }
+          
+          profileData = await profileRes.json();
+          setUserDetails(profileData);
+          console.log("Profile data loaded successfully");
+        } catch (err) {
+          console.error("Profile fetch failed:", err);
+          setError(`Failed to load profile: ${err.message}`);
         }
-
-        const tweetsData = await tweetsRes.json();
-        const followersData = await followersRes.json();
-        const followingData = await followingRes.json();
-        const profileData = await profileRes.json();
-
-        setTweets(tweetsData);
-        setFollowers(followersData);
-        setFollowing(followingData);
-        setUserDetails(profileData);
+        
+        try {
+          console.log("Fetching tweets");
+          const tweetsRes = await fetch(`${API_URL}/user/tweets/`, {
+            credentials: "include",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (!tweetsRes.ok) {
+            const errorText = await tweetsRes.text();
+            console.error("Tweets fetch error:", errorText);
+            throw new Error(`Tweets error: ${tweetsRes.status}`);
+          }
+          
+          tweetsData = await tweetsRes.json();
+          setTweets(Array.isArray(tweetsData) ? tweetsData : []);
+          console.log("Tweets loaded successfully");
+        } catch (err) {
+          console.error("Tweets fetch failed:", err);
+          // Don't override profile error if it exists
+          if (!error) setError(`Failed to load tweets: ${err.message}`);
+        }
+        
+        try {
+          console.log("Fetching followers");
+          const followersRes = await fetch(`${API_URL}/user/followers/`, {
+            credentials: "include",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (!followersRes.ok) {
+            const errorText = await followersRes.text();
+            console.error("Followers fetch error:", errorText);
+            throw new Error(`Followers error: ${followersRes.status}`);
+          }
+          
+          followersData = await followersRes.json();
+          setFollowers(Array.isArray(followersData) ? followersData : []);
+          console.log("Followers loaded successfully");
+        } catch (err) {
+          console.error("Followers fetch failed:", err);
+          // Don't override existing errors
+          if (!error) setError(`Failed to load followers: ${err.message}`);
+        }
+        
+        try {
+          console.log("Fetching following");
+          const followingRes = await fetch(`${API_URL}/user/following/`, {
+            credentials: "include",
+            headers: { "Content-Type": "application/json" }
+          });
+          
+          if (!followingRes.ok) {
+            const errorText = await followingRes.text();
+            console.error("Following fetch error:", errorText);
+            throw new Error(`Following error: ${followingRes.status}`);
+          }
+          
+          followingData = await followingRes.json();
+          setFollowing(Array.isArray(followingData) ? followingData : []);
+          console.log("Following loaded successfully");
+        } catch (err) {
+          console.error("Following fetch failed:", err);
+          // Don't override existing errors
+          if (!error) setError(`Failed to load following: ${err.message}`);
+        }
       } catch (err) {
-        console.error("Fetch Error:", err);
-        setError(err.message);
+        console.error("Overall fetch error:", err);
+        setError(err.message || "Error loading profile data");
       } finally {
         setLoading(false);
       }
