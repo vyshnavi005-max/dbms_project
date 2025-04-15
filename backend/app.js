@@ -622,44 +622,72 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
         }
         
         // Check if already liked
-        const selectQuery = process.env.NODE_ENV === 'production'
-            ? 'SELECT * FROM "Like" WHERE user_id = $1 AND tweet_id = $2'
-            : 'SELECT * FROM Like WHERE user_id = ? AND tweet_id = ?';
-        
-        const existingLike = await dbHelpers.execute(selectQuery, [user.user_id, tweetId]);
-        console.log(`Existing like check result:`, existingLike);
+        let existingLike;
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                existingLike = await db.oneOrNone('SELECT * FROM "Like" WHERE user_id = $1 AND tweet_id = $2', 
+                    [user.user_id, tweetId]);
+                console.log(`Existing like check result:`, !!existingLike);
+            } catch (pgError) {
+                console.error("PostgreSQL select error:", pgError);
+                throw pgError;
+            }
+        } else {
+            existingLike = await dbHelpers.execute(
+                'SELECT * FROM Like WHERE user_id = ? AND tweet_id = ?',
+                [user.user_id, tweetId]
+            );
+        }
         
         if (existingLike) {
             // Unlike
-            const deleteQuery = process.env.NODE_ENV === 'production'
-                ? 'DELETE FROM "Like" WHERE user_id = $1 AND tweet_id = $2'
-                : 'DELETE FROM Like WHERE user_id = ? AND tweet_id = ?';
-            
-            await dbHelpers.execute(deleteQuery, [user.user_id, tweetId]);
-            console.log(`User ${username} unliked tweet ${tweetId}`);
+            if (process.env.NODE_ENV === 'production') {
+                try {
+                    await db.none('DELETE FROM "Like" WHERE user_id = $1 AND tweet_id = $2',
+                        [user.user_id, tweetId]);
+                    console.log(`User ${username} unliked tweet ${tweetId}`);
+                } catch (pgError) {
+                    console.error("PostgreSQL delete error:", pgError);
+                    throw pgError;
+                }
+            } else {
+                await dbHelpers.execute(
+                    'DELETE FROM Like WHERE user_id = ? AND tweet_id = ?',
+                    [user.user_id, tweetId]
+                );
+            }
         } else {
             // Like
-            const insertQuery = process.env.NODE_ENV === 'production'
-                ? 'INSERT INTO "Like" (user_id, tweet_id) VALUES ($1, $2)'
-                : 'INSERT INTO Like (user_id, tweet_id) VALUES (?, ?)';
-            
-            await dbHelpers.execute(insertQuery, [user.user_id, tweetId]);
-            console.log(`User ${username} liked tweet ${tweetId}`);
+            if (process.env.NODE_ENV === 'production') {
+                try {
+                    await db.none('INSERT INTO "Like" (user_id, tweet_id) VALUES ($1, $2)',
+                        [user.user_id, tweetId]);
+                    console.log(`User ${username} liked tweet ${tweetId}`);
+                } catch (pgError) {
+                    console.error("PostgreSQL insert error:", pgError);
+                    throw pgError;
+                }
+            } else {
+                await dbHelpers.execute(
+                    'INSERT INTO Like (user_id, tweet_id) VALUES (?, ?)',
+                    [user.user_id, tweetId]
+                );
+            }
             
             // Create notification
             try {
-                const notifQuery = process.env.NODE_ENV === 'production'
-                    ? 'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)'
-                    : 'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)';
-                
-                await dbHelpers.execute(notifQuery, [
-                    tweet.user_id, 
-                    user.user_id, 
-                    tweetId, 
-                    'like', 
-                    `${username} liked your tweet.`, 
-                    false
-                ]);
+                if (process.env.NODE_ENV === 'production') {
+                    await db.none(
+                        'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
+                        [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`, false]
+                    );
+                } else {
+                    await dbHelpers.execute(
+                        'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)',
+                        [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`, false]
+                    );
+                }
+                console.log(`Created like notification for tweet ${tweetId}`);
             } catch (notifError) {
                 console.error("Error creating notification:", notifError);
                 // Continue even if notification creation fails
@@ -667,12 +695,23 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
         }
         
         // Get updated likes
-        const likesQuery = process.env.NODE_ENV === 'production'
-            ? `SELECT u.username FROM "Like" l JOIN "User" u ON l.user_id = u.user_id WHERE l.tweet_id = $1`
-            : `SELECT u.username FROM Like l JOIN User u ON l.user_id = u.user_id WHERE l.tweet_id = ?`;
-        
-        const likes = await dbHelpers.execute(likesQuery, [tweetId]);
-        console.log(`Updated likes for tweet ${tweetId}:`, likes);
+        let likes = [];
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                likes = await db.any('SELECT u.username FROM "Like" l JOIN "User" u ON l.user_id = u.user_id WHERE l.tweet_id = $1',
+                    [tweetId]);
+                console.log(`Updated likes for tweet ${tweetId}:`, likes.length);
+            } catch (pgError) {
+                console.error("PostgreSQL select error:", pgError);
+                likes = [];
+            }
+        } else {
+            const result = await dbHelpers.execute(
+                'SELECT u.username FROM Like l JOIN User u ON l.user_id = u.user_id WHERE l.tweet_id = ?',
+                [tweetId]
+            );
+            likes = Array.isArray(result) ? result : [];
+        }
         
         response.json({
             message: existingLike ? "Tweet unliked successfully" : "Tweet liked successfully",
@@ -682,7 +721,11 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
     } catch (err) {
         console.error("Error handling like:", err);
         console.error(err.stack);
-        response.status(500).json({ error: "Internal server error", message: err.message });
+        response.status(500).json({ 
+            error: "Internal server error", 
+            message: err.message,
+            details: process.env.NODE_ENV !== 'production' ? err.stack : undefined
+        });
     }
 });
 
@@ -714,11 +757,25 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
         }
         
         // Check if following
-        const followingQuery = process.env.NODE_ENV === 'production'
-            ? 'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
-            : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?';
-        
-        const isFollowing = await dbHelpers.execute(followingQuery, [user.user_id, tweet.user_id]);
+        let isFollowing = false;
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                const followCheck = await db.oneOrNone(
+                    'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
+                    [user.user_id, tweet.user_id]
+                );
+                isFollowing = !!followCheck;
+            } catch (pgError) {
+                console.error("PostgreSQL select error:", pgError);
+                throw pgError;
+            }
+        } else {
+            const followCheck = await dbHelpers.execute(
+                'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
+                [user.user_id, tweet.user_id]
+            );
+            isFollowing = !!followCheck;
+        }
         
         if (!isFollowing && user.user_id !== tweet.user_id) {
             console.log(`User ${username} is not following tweet author and is not the author`);
@@ -728,28 +785,41 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
         }
         
         // Add reply
-        const insertQuery = process.env.NODE_ENV === 'production'
-            ? 'INSERT INTO "Reply" (user_id, tweet_id, reply) VALUES ($1, $2, $3)'
-            : 'INSERT INTO Reply (user_id, tweet_id, reply) VALUES (?, ?, ?)';
-        
-        await dbHelpers.execute(insertQuery, [user.user_id, tweetId, replyText]);
-        console.log(`User ${username} replied to tweet ${tweetId}`);
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                await db.none(
+                    'INSERT INTO "Reply" (user_id, tweet_id, reply) VALUES ($1, $2, $3)',
+                    [user.user_id, tweetId, replyText]
+                );
+                console.log(`User ${username} replied to tweet ${tweetId}`);
+            } catch (pgError) {
+                console.error("PostgreSQL insert error:", pgError);
+                throw pgError;
+            }
+        } else {
+            await dbHelpers.execute(
+                'INSERT INTO Reply (user_id, tweet_id, reply) VALUES (?, ?, ?)',
+                [user.user_id, tweetId, replyText]
+            );
+        }
         
         // Create notification if the reply is not to the user's own tweet
         if (user.user_id !== tweet.user_id) {
             try {
-                const notifQuery = process.env.NODE_ENV === 'production'
-                    ? 'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)'
-                    : 'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)';
-                
-                await dbHelpers.execute(notifQuery, [
-                    tweet.user_id, 
-                    user.user_id, 
-                    tweetId, 
-                    'reply', 
-                    `${username} replied to your tweet: "${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}"`, 
-                    false
-                ]);
+                if (process.env.NODE_ENV === 'production') {
+                    await db.none(
+                        'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
+                        [tweet.user_id, user.user_id, tweetId, 'reply', 
+                        `${username} replied to your tweet: "${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}"`, false]
+                    );
+                } else {
+                    await dbHelpers.execute(
+                        'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)',
+                        [tweet.user_id, user.user_id, tweetId, 'reply', 
+                        `${username} replied to your tweet: "${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}"`, false]
+                    );
+                }
+                console.log(`Created reply notification for tweet ${tweetId}`);
             } catch (notifError) {
                 console.error("Error creating notification:", notifError);
                 // Continue even if notification creation fails
@@ -757,29 +827,36 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
         }
         
         // Get updated replies
-        const repliesQuery = process.env.NODE_ENV === 'production'
-            ? `
-                SELECT u.name, r.reply
-                FROM "Reply" r
-                JOIN "User" u ON r.user_id = u.user_id
-                WHERE r.tweet_id = $1
-                ORDER BY r.date_time DESC
-            `
-            : `
+        let replies = [];
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                replies = await db.any(`
+                    SELECT u.name, r.reply
+                    FROM "Reply" r
+                    JOIN "User" u ON r.user_id = u.user_id
+                    WHERE r.tweet_id = $1
+                    ORDER BY r.date_time DESC
+                `, [tweetId]);
+                console.log(`Found ${replies.length} replies for tweet ${tweetId}`);
+            } catch (pgError) {
+                console.error("PostgreSQL select error:", pgError);
+                replies = [];
+            }
+        } else {
+            const result = await dbHelpers.execute(`
                 SELECT u.name, r.reply
                 FROM Reply r
                 JOIN User u ON r.user_id = u.user_id
                 WHERE r.tweet_id = ?
                 ORDER BY r.date_time DESC
-            `;
+            `, [tweetId]);
+            replies = Array.isArray(result) ? result : [];
+        }
         
-        const replies = await dbHelpers.execute(repliesQuery, [tweetId]);
-        console.log(`Updated replies for tweet ${tweetId}:`, replies ? replies.length : 0);
-        
-        const formattedReplies = Array.isArray(replies) ? replies.map(item => ({
+        const formattedReplies = replies.map(item => ({
             name: item.name,
             reply: item.reply
-        })) : [];
+        }));
         
         response.json({
             message: "Reply added successfully",
@@ -788,7 +865,11 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
     } catch (err) {
         console.error("Error handling reply:", err);
         console.error(err.stack);
-        response.status(500).json({ error: "Internal server error", message: err.message });
+        response.status(500).json({ 
+            error: "Internal server error", 
+            message: err.message,
+            details: process.env.NODE_ENV !== 'production' ? err.stack : undefined
+        });
     }
 });
 
@@ -1156,14 +1237,28 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
         if (process.env.NODE_ENV === 'production') {
             // For PostgreSQL
             try {
-                console.log("Using PostgreSQL insert with RETURNING");
-                const result = await db.one('INSERT INTO "Tweet" (tweet, user_id, date_time) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING tweet_id, date_time', 
+                console.log("Using PostgreSQL insert");
+                // Use 'none' instead of 'one' since we're not using RETURNING
+                await db.none('INSERT INTO "Tweet" (tweet, user_id, date_time) VALUES ($1, $2, CURRENT_TIMESTAMP)', 
                     [tweet, user.user_id]);
-                tweetId = result.tweet_id;
-                dateTime = result.date_time;
-                console.log(`Tweet created with ID: ${tweetId}`);
+                    
+                // Then query the inserted tweet separately if needed
+                const latestTweet = await db.oneOrNone(
+                    'SELECT tweet_id, date_time FROM "Tweet" WHERE user_id = $1 ORDER BY date_time DESC LIMIT 1',
+                    [user.user_id]
+                );
+                
+                if (latestTweet) {
+                    tweetId = latestTweet.tweet_id;
+                    dateTime = latestTweet.date_time;
+                    console.log(`Retrieved tweet with ID: ${tweetId}`);
+                } else {
+                    console.log("Tweet created but couldn't retrieve ID");
+                    tweetId = 0;
+                    dateTime = new Date().toISOString();
+                }
             } catch (pgError) {
-                console.error("PostgreSQL insert error:", pgError);
+                console.error("PostgreSQL insert/query error:", pgError);
                 throw pgError;
             }
         } else {
@@ -1181,7 +1276,7 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
             }
         }
 
-        console.log('Tweet created successfully with ID:', tweetId);
+        console.log('Tweet created successfully');
 
         return response.status(201).json({
             message: "Created a Tweet",
@@ -1471,30 +1566,51 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
     const { username } = request.user;
     const { userId } = request.params;
     
+    console.log(`User ${username} attempting to follow/unfollow user with ID ${userId}`);
+    
     // Get current user
     const currentUser = await dbHelpers.getUserByUsername(username);
-    if (!currentUser) return response.status(404).json({ error: 'User not found' });
+    if (!currentUser) {
+        console.log(`Current user ${username} not found`);
+        return response.status(404).json({ error: 'User not found' });
+    }
     
     // Get user to follow
     const userToFollow = await dbHelpers.getUserById(userId);
-    if (!userToFollow) return response.status(404).json({ error: 'User to follow not found' });
+    if (!userToFollow) {
+        console.log(`User to follow with ID ${userId} not found`);
+        return response.status(404).json({ error: 'User to follow not found' });
+    }
+    
+    console.log(`User ${username} (ID: ${currentUser.user_id}) attempting to follow/unfollow ${userToFollow.username} (ID: ${userToFollow.user_id})`);
     
     // Check if already following
-    const isAlreadyFollowing = await dbHelpers.execute(
-      process.env.NODE_ENV === 'production'
+    const checkQuery = process.env.NODE_ENV === 'production'
         ? 'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
-        : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
-      [currentUser.user_id, userToFollow.user_id]
-    );
+        : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?';
+    
+    const isAlreadyFollowing = await dbHelpers.execute(checkQuery, [currentUser.user_id, userToFollow.user_id]);
+    console.log(`Is already following: ${!!isAlreadyFollowing}`);
     
     if (isAlreadyFollowing) {
       // Unfollow if already following
-      await dbHelpers.execute(
-        process.env.NODE_ENV === 'production'
-          ? 'DELETE FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
-          : 'DELETE FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
-        [currentUser.user_id, userToFollow.user_id]
-      );
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Direct PostgreSQL query
+              await db.none('DELETE FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
+                  [currentUser.user_id, userToFollow.user_id]);
+              console.log(`User ${username} unfollowed ${userToFollow.username}`);
+          } catch (pgError) {
+              console.error("PostgreSQL delete error:", pgError);
+              throw pgError;
+          }
+      } else {
+          // SQLite
+          await dbHelpers.execute(
+              'DELETE FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
+              [currentUser.user_id, userToFollow.user_id]
+          );
+      }
       
       return response.json({ 
         success: true, 
@@ -1503,17 +1619,28 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
       });
     } else {
       // Follow user
-      await dbHelpers.execute(
-        process.env.NODE_ENV === 'production'
-          ? 'INSERT INTO "Follower" (follower_user_id, following_user_id) VALUES ($1, $2)'
-          : 'INSERT INTO Follower (follower_user_id, following_user_id) VALUES (?, ?)',
-        [currentUser.user_id, userToFollow.user_id]
-      );
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Direct PostgreSQL query
+              await db.none('INSERT INTO "Follower" (follower_user_id, following_user_id) VALUES ($1, $2)',
+                  [currentUser.user_id, userToFollow.user_id]);
+              console.log(`User ${username} followed ${userToFollow.username}`);
+          } catch (pgError) {
+              console.error("PostgreSQL insert error:", pgError);
+              throw pgError;
+          }
+      } else {
+          // SQLite
+          await dbHelpers.execute(
+              'INSERT INTO Follower (follower_user_id, following_user_id) VALUES (?, ?)',
+              [currentUser.user_id, userToFollow.user_id]
+          );
+      }
       
       // Try to create notification
       try {
         if (process.env.NODE_ENV === 'production') {
-          await dbHelpers.execute(
+          await db.none(
             'INSERT INTO "Notifications" (user_id, from_user_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5)',
             [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
           );
@@ -1523,6 +1650,7 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
             [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
           );
         }
+        console.log(`Created follow notification for ${userToFollow.username}`);
       } catch (notifError) {
         console.error('Error creating follow notification:', notifError);
         // Continue even if notification creation fails
@@ -1536,7 +1664,12 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
     }
   } catch (error) {
     console.error('Error following user:', error);
-    response.status(500).json({ error: 'Internal server error', message: error.message });
+    console.error(error.stack);
+    response.status(500).json({ 
+        error: 'Internal server error', 
+        message: error.message,
+        details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+    });
   }
 });
 
