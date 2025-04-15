@@ -1055,3 +1055,6 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
         return response.status(500).json({ error: "Server error" });
     }
 });
+
+// Make sure to export the app for import in other files
+module.exports = app;
