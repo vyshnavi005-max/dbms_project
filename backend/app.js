@@ -552,179 +552,190 @@ app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
 
 
 const likedNames = (data) => {
-    const names = data.map((item) => item.name);
-    return {
-      likes: names,
-      hasLiked: names.length > 0,
-    };
+  // Ensure data is an array
+  const safeData = Array.isArray(data) ? data : [];
+  const names = safeData.map((item) => item?.name || '');
+  return {
+    likes: names,
+    hasLiked: names.length > 0,
   };
+};
   
-  app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
-    try {
-        const { username } = req.user;
-        const { tweetId } = req.params;
-        
-        console.log(`User ${username} requesting likes for tweet ${tweetId}`);
-        
-        // Get user
-        const user = await dbHelpers.getUserByUsername(username);
-        if (!user) {
-            console.log(`User ${username} not found in database`);
-            return res.status(400).json({ error: "User not found" });
-        }
-        
-        let likes = [];
-        
-        if (process.env.NODE_ENV === 'production') {
-            try {
-                // Use db.any for PostgreSQL
-                likes = await db.any(`
-                    SELECT u.name
-                    FROM "Like" l
-                    JOIN "User" u ON l.user_id = u.user_id
-                    WHERE l.tweet_id = $1
-                      AND l.tweet_id IN (
-                        SELECT tweet_id
-                        FROM "Tweet"
-                        WHERE user_id IN (
-                          SELECT following_user_id
-                          FROM "Follower"
-                          WHERE follower_user_id = $2
-                        )
-                      )
-                `, [tweetId, user.user_id]);
-                
-                console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL)`);
-            } catch (pgError) {
-                console.error("PostgreSQL query error:", pgError);
-                console.error(pgError.stack);
-                likes = [];
-            }
-        } else {
-            // SQLite
-            const query = `
-                SELECT u.name
-                FROM "Like" l
-                JOIN "User" u ON l.user_id = u.user_id
-                WHERE l.tweet_id = ?
+app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
+  try {
+      const { username } = req.user;
+      const { tweetId } = req.params;
+      
+      console.log(`User ${username} requesting likes for tweet ${tweetId}`);
+      
+      // Get user
+      const user = await dbHelpers.getUserByUsername(username);
+      if (!user) {
+          console.log(`User ${username} not found in database`);
+          return res.status(400).json({ error: "User not found" });
+      }
+      
+      let likes = [];
+      
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Use db.any for PostgreSQL - safer as it returns empty array when no results
+              likes = await db.any(`
+                  SELECT u.name
+                  FROM "Like" l
+                  JOIN "User" u ON l.user_id = u.user_id
+                  WHERE l.tweet_id = $1
                   AND l.tweet_id IN (
-                    SELECT tweet_id
-                    FROM "Tweet"
-                    WHERE user_id IN (
-                      SELECT following_user_id
-                      FROM "Follower"
-                      WHERE follower_user_id = ?
-                    )
+                      SELECT t.tweet_id
+                      FROM "Tweet" t
+                      WHERE t.user_id IN (
+                          SELECT f.following_user_id 
+                          FROM "Follower" f 
+                          WHERE f.follower_user_id = $2
+                      )
+                      OR t.user_id = $2
                   )
-            `;
-            
-            const result = await dbHelpers.execute(query, [tweetId, user.user_id]);
-            likes = Array.isArray(result) ? result : [];
-            console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
-        }
-        
-        // Format the response
-        const likeNames = likes.map(item => item.name);
-        
-        return res.json({
-            likes: likeNames,
-            hasLiked: likeNames.length > 0
-        });
-    } catch (error) {
-        console.error("Error fetching likes:", error);
-        console.error(error.stack);
-        return res.status(500).json({ 
-            error: "Server error", 
-            message: error.message,
-            details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
-        });
-    }
+              `, [tweetId, user.user_id]);
+              
+              console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL)`);
+          } catch (pgError) {
+              console.error("PostgreSQL query error:", pgError);
+              console.error(pgError.stack);
+              likes = [];
+          }
+      } else {
+          // SQLite
+          const query = `
+              SELECT u.name
+              FROM "Like" l
+              JOIN "User" u ON l.user_id = u.user_id
+              WHERE l.tweet_id = ?
+              AND l.tweet_id IN (
+                  SELECT t.tweet_id
+                  FROM "Tweet" t
+                  WHERE t.user_id IN (
+                      SELECT f.following_user_id 
+                      FROM "Follower" f 
+                      WHERE f.follower_user_id = ?
+                  )
+                  OR t.user_id = ?
+              )
+          `;
+          
+          const result = await dbHelpers.execute(query, [tweetId, user.user_id, user.user_id]);
+          likes = Array.isArray(result) ? result : [];
+          console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
+      }
+      
+      // Format the response - ensure we have an array to map over
+      const likeNames = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
+      
+      return res.json({
+          likes: likeNames,
+          hasLiked: likeNames.length > 0
+      });
+  } catch (error) {
+      console.error("Error fetching likes:", error);
+      console.error(error.stack);
+      return res.status(500).json({ 
+          error: "Server error", 
+          message: error.message,
+          details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+      });
+  }
 });
   
 const repliesNames = (item) => {
-    return { name: item.name, reply: item.reply };
+  return { 
+    name: item?.name || '', 
+    reply: item?.reply || '' 
   };
+};
   
-  app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
-    try {
-        const { username } = req.user;
-        const { tweetId } = req.params;
-        
-        console.log(`User ${username} requesting replies for tweet ${tweetId}`);
-        
-        // Get user
-        const user = await dbHelpers.getUserByUsername(username);
-        if (!user) {
-            console.log(`User ${username} not found in database`);
-            return res.status(400).json({ error: "User not found" });
-        }
-        
-        let replies = [];
-        
-        if (process.env.NODE_ENV === 'production') {
-            try {
-                // Use db.any for PostgreSQL
-                replies = await db.any(`
-                    SELECT u.name, r.reply
-                    FROM "Reply" r
-                    JOIN "User" u ON r.user_id = u.user_id
-                    WHERE r.tweet_id = $1
-                      AND r.tweet_id IN (
-                        SELECT tweet_id
-                        FROM "Tweet"
-                        WHERE user_id IN (
-                          SELECT following_user_id
-                          FROM "Follower"
-                          WHERE follower_user_id = $2
-                        )
-                      )
-                `, [tweetId, user.user_id]);
-                
-                console.log(`Found ${replies.length} replies for tweet ${tweetId} (PostgreSQL)`);
-            } catch (pgError) {
-                console.error("PostgreSQL query error:", pgError);
-                console.error(pgError.stack);
-                replies = [];
-            }
-        } else {
-            // SQLite
-            const query = `
-                SELECT u.name, r.reply
-                FROM "Reply" r
-                JOIN "User" u ON r.user_id = u.user_id
-                WHERE r.tweet_id = ?
+app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
+  try {
+      const { username } = req.user;
+      const { tweetId } = req.params;
+      
+      console.log(`User ${username} requesting replies for tweet ${tweetId}`);
+      
+      // Get user
+      const user = await dbHelpers.getUserByUsername(username);
+      if (!user) {
+          console.log(`User ${username} not found in database`);
+          return res.status(400).json({ error: "User not found" });
+      }
+      
+      let replies = [];
+      
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Use db.any for PostgreSQL - returns empty array when no results
+              replies = await db.any(`
+                  SELECT u.name, r.reply
+                  FROM "Reply" r
+                  JOIN "User" u ON r.user_id = u.user_id
+                  WHERE r.tweet_id = $1
                   AND r.tweet_id IN (
-                    SELECT tweet_id
-                    FROM "Tweet"
-                    WHERE user_id IN (
-                      SELECT following_user_id
-                      FROM "Follower"
-                      WHERE follower_user_id = ?
-                    )
+                      SELECT t.tweet_id
+                      FROM "Tweet" t
+                      WHERE t.user_id IN (
+                          SELECT f.following_user_id 
+                          FROM "Follower" f 
+                          WHERE f.follower_user_id = $2
+                      )
+                      OR t.user_id = $2
                   )
-            `;
-            
-            const result = await dbHelpers.execute(query, [tweetId, user.user_id]);
-            replies = Array.isArray(result) ? result : [];
-            console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
-        }
-        
-        // Format the response - map each reply to the expected format
-        const formattedReplies = replies.map(item => ({
-            name: item.name,
-            reply: item.reply
-        }));
-        
-        return res.json({ replies: formattedReplies });
-    } catch (error) {
-        console.error("Error fetching replies:", error);
-        console.error(error.stack);
-        return res.status(500).json({ 
-            error: "Server error", 
-            message: error.message,
-            details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
-        });
-    }
+              `, [tweetId, user.user_id]);
+              
+              console.log(`Found ${replies.length} replies for tweet ${tweetId} (PostgreSQL)`);
+          } catch (pgError) {
+              console.error("PostgreSQL query error:", pgError);
+              console.error(pgError.stack);
+              replies = [];
+          }
+      } else {
+          // SQLite
+          const query = `
+              SELECT u.name, r.reply
+              FROM "Reply" r
+              JOIN "User" u ON r.user_id = u.user_id
+              WHERE r.tweet_id = ?
+              AND r.tweet_id IN (
+                  SELECT t.tweet_id
+                  FROM "Tweet" t
+                  WHERE t.user_id IN (
+                      SELECT f.following_user_id 
+                      FROM "Follower" f 
+                      WHERE f.follower_user_id = ?
+                  )
+                  OR t.user_id = ?
+              )
+          `;
+          
+          const result = await dbHelpers.execute(query, [tweetId, user.user_id, user.user_id]);
+          replies = Array.isArray(result) ? result : [];
+          console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
+      }
+      
+      // Format the response - ensure we have an array to map over
+      const formattedReplies = Array.isArray(replies) 
+          ? replies.map(item => ({
+              name: item?.name || '',
+              reply: item?.reply || ''
+          }))
+          : [];
+      
+      return res.json({ replies: formattedReplies });
+  } catch (error) {
+      console.error("Error fetching replies:", error);
+      console.error(error.stack);
+      return res.status(500).json({ 
+          error: "Server error", 
+          message: error.message,
+          details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+      });
+  }
 });
   
 
