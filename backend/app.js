@@ -202,26 +202,41 @@ const dbHelpers = {
     const normalizedQuery = query.trim().toLowerCase();
     
     try {
+      console.log(`Executing query in ${process.env.NODE_ENV} mode:`, query);
+      console.log('With params:', JSON.stringify(params));
+      
       if (process.env.NODE_ENV === 'production') {
-        // For PostgreSQL, determine the right method based on expected result
+        // For PostgreSQL
+        // Replace ? parameters with $1, $2, etc. if needed
+        let pgQuery = query;
+        if (pgQuery.includes('?')) {
+          console.log('Converting ? parameters to $n format for PostgreSQL');
+          // Replace ? with $1, $2, etc.
+          let paramIndex = 0;
+          pgQuery = pgQuery.replace(/\?/g, () => `$${++paramIndex}`);
+          console.log('Converted query:', pgQuery);
+        }
+        
+        // Determine the right method based on expected result
         if (normalizedQuery.startsWith('select')) {
           // Handle COUNT queries which may return a single row with count
           if (normalizedQuery.includes('count(') || normalizedQuery.includes(' count ')) {
-            return await db.oneOrNone(query, params);
+            return await db.oneOrNone(pgQuery, params);
           }
           // Handle queries expected to return at most one row
           else if (normalizedQuery.includes('limit 1') || 
               (normalizedQuery.includes('where') && 
-              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =')))) {
-            return await db.oneOrNone(query, params);
+              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =') || 
+               normalizedQuery.includes('username =')))) {
+            return await db.oneOrNone(pgQuery, params);
           } 
           // Default to any for multiple results
           else {
-            return await db.any(query, params);
+            return await db.any(pgQuery, params);
           }
         } else {
           // For non-SELECT queries (INSERT, UPDATE, DELETE)
-          return await db.none(query, params);
+          return await db.none(pgQuery, params);
         }
       } else {
         // For SQLite
@@ -233,7 +248,8 @@ const dbHelpers = {
           // Handle queries expected to return at most one row
           else if (normalizedQuery.includes('limit 1') || 
               (normalizedQuery.includes('where') && 
-              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =')))) {
+              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =') ||
+               normalizedQuery.includes('username =')))) {
             return await db.get(query, params);
           } 
           // Default to all for multiple results
@@ -249,6 +265,7 @@ const dbHelpers = {
       console.error(`Database error executing query: ${query}`);
       console.error(`With params: ${JSON.stringify(params)}`);
       console.error(`Error details: ${error.message}`);
+      console.error(error.stack);
       throw error;
     }
   }
@@ -433,25 +450,44 @@ const convertToCamelCaseForTweets = (tweets) => ({
 app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, dbResponse;
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        // Get current user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) return response.status(400).json({ error: "User not found" });
         
-        dbResponse = await dbHelpers.execute(`
-            SELECT u.username, t.tweet_id, t.tweet, t.date_time
-            FROM "Tweet" t
-            JOIN "Follower" f ON t.user_id = f.following_user_id
-            JOIN "User" u ON u.user_id = t.user_id
-            WHERE f.follower_user_id = $1
-            ORDER BY t.date_time DESC
-            LIMIT 10
-        `, [user.user_id]);
+        // For PostgreSQL, Properly quote table and column names
+        const query = process.env.NODE_ENV === 'production' 
+          ? `
+              SELECT u.username, t.tweet_id, t.tweet, t.date_time
+              FROM "Tweet" t
+              JOIN "Follower" f ON t.user_id = f.following_user_id
+              JOIN "User" u ON u.user_id = t.user_id
+              WHERE f.follower_user_id = $1
+              ORDER BY t.date_time DESC
+              LIMIT 10
+          `
+          : `
+              SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
+              FROM Tweet
+              JOIN Follower ON Tweet.user_id = Follower.following_user_id
+              JOIN User ON User.user_id = Tweet.user_id
+              WHERE Follower.follower_user_id = ?
+              ORDER BY Tweet.date_time DESC
+              LIMIT 10
+          `;
         
-        response.send(dbResponse.map(convertToCamelCaseForTweets));
+        const dbResponse = await dbHelpers.execute(query, [user.user_id]);
+        
+        // Add more logging to debug the response
+        console.log(`Feed found ${dbResponse ? dbResponse.length : 0} tweets for user ${username}`);
+        
+        // Ensure dbResponse is an array before mapping
+        const tweets = Array.isArray(dbResponse) ? dbResponse.map(convertToCamelCaseForTweets) : [];
+        response.json(tweets);
     } catch (error) {
         console.error("Error fetching tweet feed:", error);
-        response.status(500).send("Server error");
+        console.error(error.stack); // Log the full stack trace
+        response.status(500).json({ error: "Server error", message: error.message });
     }
 });
 
@@ -944,6 +980,27 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
         const user = await dbHelpers.getUserByUsername(username);
         if (!user) return response.status(400).json({ error: "User not found" });
         
+        // Try to create Notifications table if it doesn't exist (only in production)
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                await db.query(`
+                    CREATE TABLE IF NOT EXISTS "Notifications" (
+                        id SERIAL PRIMARY KEY,
+                        user_id INTEGER REFERENCES "User"(user_id),
+                        from_user_id INTEGER REFERENCES "User"(user_id),
+                        tweet_id INTEGER REFERENCES "Tweet"(tweet_id),
+                        type TEXT,
+                        message TEXT,
+                        is_read BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    )
+                `);
+                console.log("Created Notifications table if it didn't exist");
+            } catch (tableError) {
+                console.error("Error ensuring Notifications table exists:", tableError);
+            }
+        }
+        
         let notifications = [];
         const notificationQueries = [];
         
@@ -966,23 +1023,6 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                 `,
                 params: [user.user_id]
             });
-            
-            notificationQueries.push({
-                name: 'Notification table with triggered_by_user_id',
-                query: `
-                    SELECT 
-                        n.id as notification_id, 
-                        n.content, 
-                        COALESCE(n.created_at, n.date_time) as date_time, 
-                        n.is_read, 
-                        u.username as triggered_by_username 
-                    FROM "Notification" n
-                    LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
-                    WHERE n.user_id = $1
-                    ORDER BY COALESCE(n.created_at, n.date_time) DESC
-                `,
-                params: [user.user_id]
-            });
         } else {
             // SQLite queries
             notificationQueries.push({
@@ -1001,23 +1041,6 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                 `,
                 params: [user.user_id]
             });
-            
-            notificationQueries.push({
-                name: 'SQLite Notification table',
-                query: `
-                    SELECT 
-                        n.id as notification_id, 
-                        n.content, 
-                        n.date_time, 
-                        n.is_read, 
-                        u.username as triggered_by_username 
-                    FROM Notification n
-                    LEFT JOIN User u ON n.triggered_by_user_id = u.user_id
-                    WHERE n.user_id = ?
-                    ORDER BY n.date_time DESC
-                `,
-                params: [user.user_id]
-            });
         }
         
         // Try each query until one works
@@ -1025,9 +1048,12 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
         for (const queryInfo of notificationQueries) {
             try {
                 console.log(`Trying notifications query: ${queryInfo.name}`);
-                notifications = await dbHelpers.execute(queryInfo.query, queryInfo.params);
-                console.log(`Successfully got ${notifications.length} notifications with query: ${queryInfo.name}`);
-                break; // Exit loop if query succeeds
+                const result = await dbHelpers.execute(queryInfo.query, queryInfo.params);
+                if (result) {
+                    notifications = result;
+                    console.log(`Successfully got ${notifications.length} notifications with query: ${queryInfo.name}`);
+                    break; // Exit loop if query succeeds
+                }
             } catch (err) {
                 console.error(`Error with ${queryInfo.name}:`, err.message);
                 lastError = err;
@@ -1035,25 +1061,151 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             }
         }
         
-        // If we still have no notifications and all queries failed
-        if (notifications.length === 0 && lastError) {
-            console.error("All notification queries failed, using empty result");
+        // Return empty array when no notifications found or all queries failed
+        if (!notifications || !Array.isArray(notifications)) {
+            console.log("No notifications found or all queries failed, returning empty array");
+            notifications = [];
         }
         
         // Normalize results
-        const normalizedNotifications = (notifications || []).map(n => ({
-            notification_id: n.notification_id, 
-            content: n.content || n.message || '',
-            date_time: n.date_time || new Date().toISOString(),
-            is_read: !!n.is_read,
-            triggered_by_username: n.triggered_by_username || null
+        const normalizedNotifications = notifications.map(n => ({
+            notification_id: n?.notification_id || 0, 
+            content: n?.content || n?.message || '',
+            date_time: n?.date_time || new Date().toISOString(),
+            is_read: !!n?.is_read,
+            triggered_by_username: n?.triggered_by_username || null
         }));
         
         return response.json(normalizedNotifications);
     } catch (error) {
         console.error("Error fetching notifications:", error);
-        return response.status(500).json({ error: "Server error" });
+        return response.status(500).json({ error: "Server error", message: error.message });
     }
+});
+
+// Add suggestions endpoint
+app.get('/suggestions', authenticateToken, async (request, response) => {
+  try {
+    const { username } = request.user;
+    
+    // Get current user
+    const currentUser = await dbHelpers.getUserByUsername(username);
+    if (!currentUser) return response.status(404).json({ error: 'User not found' });
+    
+    // Get users not followed by current user
+    const query = process.env.NODE_ENV === 'production' 
+      ? `
+        SELECT u.user_id, u.name, u.username 
+        FROM "User" u
+        WHERE u.user_id != $1
+        AND u.user_id NOT IN (
+          SELECT f.following_user_id 
+          FROM "Follower" f
+          WHERE f.follower_user_id = $1
+        )
+        LIMIT 5
+      `
+      : `
+        SELECT u.user_id, u.name, u.username 
+        FROM User u
+        WHERE u.user_id != ?
+        AND u.user_id NOT IN (
+          SELECT f.following_user_id 
+          FROM Follower f
+          WHERE f.follower_user_id = ?
+        )
+        LIMIT 5
+      `;
+    
+    // Send parameters in the correct format based on the environment
+    const suggestions = await dbHelpers.execute(
+      query, 
+      process.env.NODE_ENV === 'production' 
+        ? [currentUser.user_id] 
+        : [currentUser.user_id, currentUser.user_id]
+    );
+    
+    // Return empty array if null or undefined
+    response.json(Array.isArray(suggestions) ? suggestions : []);
+  } catch (error) {
+    console.error('Error fetching suggestions:', error);
+    response.status(500).json({ error: 'Internal server error', message: error.message });
+  }
+});
+
+// Follow a user
+app.post('/follow/:userId', authenticateToken, async (request, response) => {
+  try {
+    const { username } = request.user;
+    const { userId } = request.params;
+    
+    // Get current user
+    const currentUser = await dbHelpers.getUserByUsername(username);
+    if (!currentUser) return response.status(404).json({ error: 'User not found' });
+    
+    // Get user to follow
+    const userToFollow = await dbHelpers.getUserById(userId);
+    if (!userToFollow) return response.status(404).json({ error: 'User to follow not found' });
+    
+    // Check if already following
+    const isAlreadyFollowing = await dbHelpers.execute(
+      process.env.NODE_ENV === 'production'
+        ? 'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
+        : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
+      [currentUser.user_id, userToFollow.user_id]
+    );
+    
+    if (isAlreadyFollowing) {
+      // Unfollow if already following
+      await dbHelpers.execute(
+        process.env.NODE_ENV === 'production'
+          ? 'DELETE FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
+          : 'DELETE FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
+        [currentUser.user_id, userToFollow.user_id]
+      );
+      
+      return response.json({ 
+        success: true, 
+        action: 'unfollowed',
+        message: `You are no longer following ${userToFollow.username}` 
+      });
+    } else {
+      // Follow user
+      await dbHelpers.execute(
+        process.env.NODE_ENV === 'production'
+          ? 'INSERT INTO "Follower" (follower_user_id, following_user_id) VALUES ($1, $2)'
+          : 'INSERT INTO Follower (follower_user_id, following_user_id) VALUES (?, ?)',
+        [currentUser.user_id, userToFollow.user_id]
+      );
+      
+      // Try to create notification
+      try {
+        if (process.env.NODE_ENV === 'production') {
+          await dbHelpers.execute(
+            'INSERT INTO "Notifications" (user_id, from_user_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5)',
+            [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
+          );
+        } else {
+          await dbHelpers.execute(
+            'INSERT INTO Notifications (user_id, from_user_id, type, message, is_read) VALUES (?, ?, ?, ?, ?)',
+            [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
+          );
+        }
+      } catch (notifError) {
+        console.error('Error creating follow notification:', notifError);
+        // Continue even if notification creation fails
+      }
+      
+      return response.json({ 
+        success: true, 
+        action: 'followed',
+        message: `You are now following ${userToFollow.username}` 
+      });
+    }
+  } catch (error) {
+    console.error('Error following user:', error);
+    response.status(500).json({ error: 'Internal server error', message: error.message });
+  }
 });
 
 // Make sure to export the app for import in other files
