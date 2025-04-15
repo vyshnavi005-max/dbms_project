@@ -11,51 +11,57 @@ const dotenv = require('dotenv')
 const fs = require('fs')
 dotenv.config();
 
-// Define allowed origins
+// Define allowed origins with a wildcard fallback for development
 const allowedOrigins = process.env.NODE_ENV === 'production' 
     ? ['https://vyshnavi005-max.github.io', 'https://twitter-clone-backend-534j.onrender.com'] 
-    : ['http://localhost:3001', 'http://localhost:3000'];
+    : ['http://localhost:3001', 'http://localhost:3000', '*'];
 
-// Use a more flexible CORS configuration
-app.use(cors({
-    origin: function(origin, callback) {
-        // Allow requests with no origin (like mobile apps, curl requests)
-        if (!origin) return callback(null, true);
-        
-        console.log("Request from origin:", origin);
-        
-        if (allowedOrigins.indexOf(origin) === -1) {
-            const msg = 'The CORS policy for this site does not allow access from the specified Origin.';
-            console.log(`CORS blocked origin: ${origin}`);
-            return callback(new Error(msg), false);
-        }
-        return callback(null, true);
-    },
-    credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin']
-}));
-
-// Handle OPTIONS requests explicitly
-app.options('*', (req, res) => {
-    const origin = req.headers.origin;
-    if (allowedOrigins.includes(origin)) {
-        res.setHeader('Access-Control-Allow-Origin', origin);
-    }
-    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, X-Requested-With, Accept, Origin');
-    res.setHeader('Access-Control-Allow-Credentials', 'true');
-    res.status(204).end();
-});
-
-// Add a middleware to log all requests
+// Remove the previous cors middleware
 app.use((req, res, next) => {
-    console.log(`${req.method} ${req.url} from ${req.headers.origin || 'Unknown Origin'}`);
+    // Get the origin from the request headers
+    const origin = req.headers.origin;
+    
+    // Check if the origin is allowed or we're in dev mode with a wildcard
+    const isAllowed = allowedOrigins.includes(origin) || 
+                     (process.env.NODE_ENV !== 'production' && allowedOrigins.includes('*'));
+    
+    // Set CORS headers
+    if (isAllowed) {
+        res.header('Access-Control-Allow-Origin', origin);
+    }
+    
+    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+    res.header('Access-Control-Allow-Credentials', 'true');
+    
+    // Handle preflight OPTIONS requests
+    if (req.method === 'OPTIONS') {
+        console.log(`Handling OPTIONS request from ${origin}`);
+        return res.status(200).end();
+    }
+    
+    // Log all requests for debugging
+    console.log(`${req.method} ${req.url} from ${origin || 'Unknown Origin'}`);
+    
     next();
 });
 
-app.use(express.json())
+// Remove previous OPTIONS handler since we now handle it in the middleware above
+
+// Add express.json middleware
+app.use(express.json());
 app.use(cookieParser());
+
+// Add specific handlers for login and register endpoints
+app.options('/login', (req, res) => {
+    console.log("OPTIONS request for /login endpoint");
+    res.status(200).end();
+});
+
+app.options('/register', (req, res) => {
+    console.log("OPTIONS request for /register endpoint");
+    res.status(200).end();
+});
 
 // Database setup
 let db = null;
@@ -276,61 +282,85 @@ app.post("/register", async (request, response) => {
 });
 
 // Login endpoint
-app.post("/login", (request, response) => {
-    const { username, password } = request.body;
+app.post("/login", async (request, response) => {
+    console.log("Login request received", request.body);
     
-    // Determine which database query to use based on environment
-    const query = process.env.NODE_ENV === 'production' 
-        ? 'SELECT * FROM "User" WHERE username = $1'
-        : 'SELECT * FROM User WHERE username = ?';
-    
-    // Execute the appropriate query
-    const dbMethod = process.env.NODE_ENV === 'production' ? db.oneOrNone : db.get;
-    dbMethod(query, [username])
-        .then(user => {
-            if (!user) {
-                return response.status(400).json({ message: "Invalid username or password" });
-            }
-            
-            // Compare the password
-            bcrypt.compare(password, user.password, (err, result) => {
-                if (err || !result) {
-                    return response.status(400).json({ message: "Invalid username or password" });
-                }
-                
-                // Create JWT token
-                const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { 
-                    expiresIn: '24h'
-                });
-                
-                // Set up cookie options
-                const cookieOptions = {
-                    httpOnly: true,
-                    secure: process.env.NODE_ENV === 'production',
-                    sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
-                    path: '/',
-                    maxAge: 24 * 60 * 60 * 1000 // 24 hours
-                };
-                
-                // Set JWT in cookie
-                response.cookie('token', token, cookieOptions);
-                
-                // Send token in response body as well
-                return response.status(200).json({
-                    message: "Login successful",
-                    user: {
-                        username: user.username,
-                        userId: user.user_id,
-                        profilePic: user.profile_pic
-                    },
-                    token: token
-                });
+    try {
+        const { username, password } = request.body;
+        
+        if (!username || !password) {
+            return response.status(400).json({ 
+                success: false,
+                message: "Username and password are required" 
             });
-        })
-        .catch(error => {
-            console.error("Login error:", error);
-            response.status(500).json({ message: "Server error during login" });
+        }
+        
+        let user;
+        
+        // Fetch user based on environment
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL query
+            user = await db.oneOrNone('SELECT * FROM "User" WHERE username = $1', [username]);
+        } else {
+            // SQLite query
+            user = await db.get('SELECT * FROM User WHERE username = ?', [username]);
+        }
+        
+        if (!user) {
+            return response.status(401).json({ 
+                success: false,
+                message: "Invalid username or password" 
+            });
+        }
+        
+        // Compare password
+        const passwordMatch = await bcrypt.compare(password, user.password);
+        
+        if (!passwordMatch) {
+            return response.status(401).json({ 
+                success: false,
+                message: "Invalid username or password" 
+            });
+        }
+        
+        // Create JWT token
+        const token = jwt.sign({ username: user.username }, process.env.JWT_SECRET, { 
+            expiresIn: '24h'
         });
+        
+        // Set up cookie options
+        const cookieOptions = {
+            httpOnly: true,
+            secure: process.env.NODE_ENV === 'production',
+            sameSite: process.env.NODE_ENV === 'production' ? 'none' : 'lax',
+            path: '/',
+            maxAge: 24 * 60 * 60 * 1000 // 24 hours
+        };
+        
+        // Set JWT in cookie
+        response.cookie('token', token, cookieOptions);
+        
+        // Log successful login
+        console.log(`User ${username} logged in successfully`);
+        
+        // Send success response with token
+        return response.status(200).json({
+            success: true,
+            message: "Login successful",
+            user: {
+                username: user.username,
+                userId: user.user_id,
+                profilePic: user.profile_pic
+            },
+            token: token
+        });
+    } catch (error) {
+        console.error("Login error:", error);
+        return response.status(500).json({ 
+            success: false,
+            message: "Server error during login" 
+        });
+    }
 });
 
 
@@ -895,9 +925,9 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
                 GROUP BY t.tweet_id, t.tweet, t.date_time
             `, [tweetId, user.user_id]);
         } else {
-            // SQLite queries
-            const getUserIdQuery = `SELECT user_id FROM User WHERE username ='${username}'`;
-            user = await db.get(getUserIdQuery);
+            // SQLite queries - using parameterized query
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
             if (!user) return response.status(400).send("User not found");
             
             const getTweetsQuery = `
@@ -910,13 +940,13 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
                 FROM Tweet t
                 LEFT JOIN Like l ON t.tweet_id = l.tweet_id
                 LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
-                WHERE t.tweet_id = ${tweetId}  
+                WHERE t.tweet_id = ?  
                 AND t.user_id IN (
-                    SELECT f.following_user_id FROM Follower f WHERE f.follower_user_id = ${user.user_id}
+                    SELECT f.following_user_id FROM Follower f WHERE f.follower_user_id = ?
                 )
                 GROUP BY t.tweet_id;
             `;
-            dbResponse = await db.get(getTweetsQuery);
+            dbResponse = await db.get(getTweetsQuery, [tweetId, user.user_id]);
         }
         
         if (!dbResponse) {
@@ -1133,11 +1163,13 @@ app.delete("/tweets/:tweetId/", authenticateToken, async (request, response) => 
             
             tweet = await db.oneOrNone('SELECT user_id FROM "Tweet" WHERE tweet_id = $1', [tweetId]);
         } else {
-            // SQLite queries
-            user = await db.get("SELECT user_id FROM User WHERE username = ?", [username]);
+            // SQLite queries - using parameterized queries
+            const getUserIdQuery = `SELECT user_id FROM User WHERE username = ?`;
+            user = await db.get(getUserIdQuery, [username]);
             if (!user) return response.status(400).send("User not found");
             
-            tweet = await db.get(`SELECT user_id FROM Tweet WHERE tweet_id = ${tweetId}`);
+            const getTweetQuery = `SELECT user_id FROM Tweet WHERE tweet_id = ?`;
+            tweet = await db.get(getTweetQuery, [tweetId]);
         }
         
         if (!tweet || tweet.user_id !== user.user_id) {
@@ -1148,8 +1180,9 @@ app.delete("/tweets/:tweetId/", authenticateToken, async (request, response) => 
             // PostgreSQL query
             await db.none('DELETE FROM "Tweet" WHERE tweet_id = $1', [tweetId]);
         } else {
-            // SQLite query
-            await db.run(`DELETE FROM Tweet WHERE tweet_id = ${tweetId}`);
+            // SQLite query - using parameterized query
+            const deleteTweetQuery = `DELETE FROM Tweet WHERE tweet_id = ?`;
+            await db.run(deleteTweetQuery, [tweetId]);
         }
         
         return response.send("Tweet Removed");
