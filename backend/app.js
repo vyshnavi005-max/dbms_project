@@ -13,30 +13,43 @@ dotenv.config();
 
 // Define allowed origins with a wildcard fallback for development
 const allowedOrigins = process.env.NODE_ENV === 'production' 
-    ? ['https://vyshnavi005-max.github.io', 'https://twitter-clone-backend-534j.onrender.com'] 
+    ? ['https://vyshnavi005-max.github.io', 'https://twitter-clone-backend-534j.onrender.com', '*'] 
     : ['http://localhost:3001', 'http://localhost:3000', '*'];
 
-// Remove the previous cors middleware
+// Clear any existing CORS middleware
 app.use((req, res, next) => {
-    // Get the origin from the request headers
     const origin = req.headers.origin;
     
-    // Check if the origin is allowed or we're in dev mode with a wildcard
-    const isAllowed = allowedOrigins.includes(origin) || 
-                     (process.env.NODE_ENV !== 'production' && allowedOrigins.includes('*'));
-    
-    // Set CORS headers
-    if (isAllowed) {
-        res.header('Access-Control-Allow-Origin', origin);
+    // For null or undefined origins (like Postman)
+    if (!origin) {
+        res.header('Access-Control-Allow-Origin', '*');
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        
+        if (req.method === 'OPTIONS') {
+            console.log(`Handling OPTIONS request from unknown origin`);
+            return res.status(200).end();
+        }
+        
+        return next();
     }
     
-    res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-    res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-    res.header('Access-Control-Allow-Credentials', 'true');
+    // Check if the origin is allowed
+    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
+        res.header('Access-Control-Allow-Origin', origin);
+        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
+        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
+        res.header('Access-Control-Allow-Credentials', 'true');
+        
+        console.log(`Request from allowed origin: ${origin}`);
+    } else {
+        console.log(`Request from disallowed origin: ${origin}`);
+    }
     
     // Handle preflight OPTIONS requests
     if (req.method === 'OPTIONS') {
-        console.log(`Handling OPTIONS request from ${origin}`);
+        console.log(`Handling OPTIONS request from ${origin || 'Unknown Origin'}`);
         return res.status(200).end();
     }
     
@@ -46,22 +59,9 @@ app.use((req, res, next) => {
     next();
 });
 
-// Remove previous OPTIONS handler since we now handle it in the middleware above
-
 // Add express.json middleware
 app.use(express.json());
 app.use(cookieParser());
-
-// Add specific handlers for login and register endpoints
-app.options('/login', (req, res) => {
-    console.log("OPTIONS request for /login endpoint");
-    res.status(200).end();
-});
-
-app.options('/register', (req, res) => {
-    console.log("OPTIONS request for /register endpoint");
-    res.status(200).end();
-});
 
 // Database setup
 let db = null;
@@ -198,28 +198,58 @@ const dbHelpers = {
   
   // Generic execution helpers
   execute: async (query, params = []) => {
-    if (process.env.NODE_ENV === 'production') {
-      // For PostgreSQL, determine the right method based on expected result
-      if (query.trim().toLowerCase().startsWith('select')) {
-        if (query.includes('limit 1') || query.includes('WHERE') && params.length === 1) {
-          return await db.oneOrNone(query, params);
+    // Normalize the query for pattern matching
+    const normalizedQuery = query.trim().toLowerCase();
+    
+    try {
+      if (process.env.NODE_ENV === 'production') {
+        // For PostgreSQL, determine the right method based on expected result
+        if (normalizedQuery.startsWith('select')) {
+          // Handle COUNT queries which may return a single row with count
+          if (normalizedQuery.includes('count(') || normalizedQuery.includes(' count ')) {
+            return await db.oneOrNone(query, params);
+          }
+          // Handle queries expected to return at most one row
+          else if (normalizedQuery.includes('limit 1') || 
+              (normalizedQuery.includes('where') && 
+              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =')))) {
+            return await db.oneOrNone(query, params);
+          } 
+          // Default to any for multiple results
+          else {
+            return await db.any(query, params);
+          }
         } else {
-          return await db.any(query, params);
+          // For non-SELECT queries (INSERT, UPDATE, DELETE)
+          return await db.none(query, params);
         }
       } else {
-        return await db.none(query, params);
-      }
-    } else {
-      // For SQLite
-      if (query.trim().toLowerCase().startsWith('select')) {
-        if (query.includes('limit 1')) {
-          return await db.get(query, params);
+        // For SQLite
+        if (normalizedQuery.startsWith('select')) {
+          // Handle COUNT queries
+          if (normalizedQuery.includes('count(') || normalizedQuery.includes(' count ')) {
+            return await db.get(query, params);
+          }
+          // Handle queries expected to return at most one row
+          else if (normalizedQuery.includes('limit 1') || 
+              (normalizedQuery.includes('where') && 
+              (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =')))) {
+            return await db.get(query, params);
+          } 
+          // Default to all for multiple results
+          else {
+            return await db.all(query, params);
+          }
         } else {
-          return await db.all(query, params);
+          // For non-SELECT queries
+          return await db.run(query, params);
         }
-      } else {
-        return await db.run(query, params);
       }
+    } catch (error) {
+      console.error(`Database error executing query: ${query}`);
+      console.error(`With params: ${JSON.stringify(params)}`);
+      console.error(`Error details: ${error.message}`);
+      throw error;
     }
   }
 };
@@ -625,26 +655,44 @@ convertToCamelCaseForFollowers=(user)=>{
 app.get('/profile', authenticateToken, async (req, res) => {
     try {
         const { username } = req.user;
-        let user, followers, following;
         
-        user = await dbHelpers.getUserByUsername(username);
+        // Get user details
+        const user = await dbHelpers.getUserByUsername(username);
         
         if (!user) {
             return res.status(404).json({ error: 'User not found' });
         }
 
-        // Get follower and following counts
-        const followersResult = await dbHelpers.execute('SELECT COUNT(*) as count FROM "Follower" WHERE following_user_id = $1', [user.user_id]);
-        const followingResult = await dbHelpers.execute('SELECT COUNT(*) as count FROM "Follower" WHERE follower_user_id = $1', [user.user_id]);
-        
-        followers = parseInt(followersResult.count) || 0;
-        following = parseInt(followingResult.count) || 0;
+        // Use more consistent SQL for count queries
+        const followersQuery = process.env.NODE_ENV === 'production' 
+            ? 'SELECT COUNT(*) as count FROM "Follower" WHERE following_user_id = $1'
+            : 'SELECT COUNT(*) as count FROM Follower WHERE following_user_id = ?';
+            
+        const followingQuery = process.env.NODE_ENV === 'production'
+            ? 'SELECT COUNT(*) as count FROM "Follower" WHERE follower_user_id = $1'
+            : 'SELECT COUNT(*) as count FROM Follower WHERE follower_user_id = ?';
 
+        // Get follower and following counts
+        const [followersResult, followingResult] = await Promise.all([
+            dbHelpers.execute(followersQuery, [user.user_id]),
+            dbHelpers.execute(followingQuery, [user.user_id])
+        ]);
+        
+        // Handle different db result formats safely
+        const followersCount = followersResult && typeof followersResult.count !== 'undefined' 
+            ? parseInt(followersResult.count) 
+            : 0;
+            
+        const followingCount = followingResult && typeof followingResult.count !== 'undefined'
+            ? parseInt(followingResult.count)
+            : 0;
+
+        // Return user profile data
         res.json({
             username: user.username,
             name: user.name,
-            followersCount: followers,
-            followingCount: following
+            followersCount: followersCount,
+            followingCount: followingCount
         });
     } catch (error) {
         console.error('Error in profile endpoint:', error);
@@ -891,36 +939,119 @@ app.delete("/tweets/:tweetId/", authenticateToken, async (request, response) => 
 app.get('/notifications/', authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, notifications;
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) return response.status(400).json({ error: "User not found" });
         
-        try {
-            notifications = await dbHelpers.execute(`
-                SELECT n.id as notification_id, n.message as content, n.created_at as date_time, 
-                       n.is_read, u.username as triggered_by_username 
-                FROM "Notifications" n
-                LEFT JOIN "User" u ON n.from_user_id = u.user_id
-                WHERE n.user_id = $1
-                ORDER BY n.created_at DESC
-            `, [user.user_id]);
-        } catch (dbError) {
-            console.error("Database error (trying fallback query):", dbError);
-            // Fallback to alternative table structure
-            notifications = await dbHelpers.execute(`
-                SELECT n.id as notification_id, n.message as content, n.created_at as date_time, 
-                       n.is_read, u.username as triggered_by_username 
-                FROM "Notification" n
-                LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
-                WHERE n.user_id = $1
-                ORDER BY n.created_at DESC
-            `, [user.user_id]);
+        let notifications = [];
+        const notificationQueries = [];
+        
+        // Add all potential queries we might need to try
+        if (process.env.NODE_ENV === 'production') {
+            // PostgreSQL queries - try different table names and column structures
+            notificationQueries.push({
+                name: 'Notifications table with from_user_id',
+                query: `
+                    SELECT 
+                        n.id as notification_id, 
+                        n.message as content, 
+                        n.created_at as date_time, 
+                        n.is_read, 
+                        u.username as triggered_by_username 
+                    FROM "Notifications" n
+                    LEFT JOIN "User" u ON n.from_user_id = u.user_id
+                    WHERE n.user_id = $1
+                    ORDER BY n.created_at DESC
+                `,
+                params: [user.user_id]
+            });
+            
+            notificationQueries.push({
+                name: 'Notification table with triggered_by_user_id',
+                query: `
+                    SELECT 
+                        n.id as notification_id, 
+                        n.content, 
+                        COALESCE(n.created_at, n.date_time) as date_time, 
+                        n.is_read, 
+                        u.username as triggered_by_username 
+                    FROM "Notification" n
+                    LEFT JOIN "User" u ON n.triggered_by_user_id = u.user_id
+                    WHERE n.user_id = $1
+                    ORDER BY COALESCE(n.created_at, n.date_time) DESC
+                `,
+                params: [user.user_id]
+            });
+        } else {
+            // SQLite queries
+            notificationQueries.push({
+                name: 'SQLite Notifications table',
+                query: `
+                    SELECT 
+                        n.id as notification_id, 
+                        n.message as content, 
+                        n.date_time, 
+                        n.is_read, 
+                        u.username as triggered_by_username 
+                    FROM Notifications n
+                    LEFT JOIN User u ON n.from_user_id = u.user_id
+                    WHERE n.user_id = ?
+                    ORDER BY n.date_time DESC
+                `,
+                params: [user.user_id]
+            });
+            
+            notificationQueries.push({
+                name: 'SQLite Notification table',
+                query: `
+                    SELECT 
+                        n.id as notification_id, 
+                        n.content, 
+                        n.date_time, 
+                        n.is_read, 
+                        u.username as triggered_by_username 
+                    FROM Notification n
+                    LEFT JOIN User u ON n.triggered_by_user_id = u.user_id
+                    WHERE n.user_id = ?
+                    ORDER BY n.date_time DESC
+                `,
+                params: [user.user_id]
+            });
         }
         
-        return response.json(notifications || []);
+        // Try each query until one works
+        let lastError = null;
+        for (const queryInfo of notificationQueries) {
+            try {
+                console.log(`Trying notifications query: ${queryInfo.name}`);
+                notifications = await dbHelpers.execute(queryInfo.query, queryInfo.params);
+                console.log(`Successfully got ${notifications.length} notifications with query: ${queryInfo.name}`);
+                break; // Exit loop if query succeeds
+            } catch (err) {
+                console.error(`Error with ${queryInfo.name}:`, err.message);
+                lastError = err;
+                // Continue to the next query
+            }
+        }
+        
+        // If we still have no notifications and all queries failed
+        if (notifications.length === 0 && lastError) {
+            console.error("All notification queries failed, using empty result");
+        }
+        
+        // Normalize results
+        const normalizedNotifications = (notifications || []).map(n => ({
+            notification_id: n.notification_id, 
+            content: n.content || n.message || '',
+            date_time: n.date_time || new Date().toISOString(),
+            is_read: !!n.is_read,
+            triggered_by_username: n.triggered_by_username || null
+        }));
+        
+        return response.json(normalizedNotifications);
     } catch (error) {
         console.error("Error fetching notifications:", error);
-        return response.status(500).send("Server error");
+        return response.status(500).json({ error: "Server error" });
     }
 });
