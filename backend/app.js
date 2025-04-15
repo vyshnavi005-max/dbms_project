@@ -480,44 +480,73 @@ const convertToCamelCaseForTweets = (tweets) => ({
 app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
+        console.log(`Fetching tweet feed for user: ${username}`);
         
         // Get current user
         const user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).json({ error: "User not found" });
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
-        // For PostgreSQL, Properly quote table and column names
-        const query = process.env.NODE_ENV === 'production' 
-          ? `
-              SELECT u.username, t.tweet_id, t.tweet, t.date_time
-              FROM "Tweet" t
-              JOIN "Follower" f ON t.user_id = f.following_user_id
-              JOIN "User" u ON u.user_id = t.user_id
-              WHERE f.follower_user_id = $1
-              ORDER BY t.date_time DESC
-              LIMIT 10
-          `
-          : `
-              SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
-              FROM Tweet
-              JOIN Follower ON Tweet.user_id = Follower.following_user_id
-              JOIN User ON User.user_id = Tweet.user_id
-              WHERE Follower.follower_user_id = ?
-              ORDER BY Tweet.date_time DESC
-              LIMIT 10
-          `;
+        console.log(`Got user with ID: ${user.user_id}`);
         
-        const dbResponse = await dbHelpers.execute(query, [user.user_id]);
+        let tweets = [];
         
-        // Add more logging to debug the response
-        console.log(`Feed found ${dbResponse ? dbResponse.length : 0} tweets for user ${username}`);
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                // Use db.any for PostgreSQL to handle multiple results
+                tweets = await db.any(`
+                    SELECT u.username, t.tweet_id, t.tweet, t.date_time
+                    FROM "Tweet" t
+                    JOIN "Follower" f ON t.user_id = f.following_user_id
+                    JOIN "User" u ON u.user_id = t.user_id
+                    WHERE f.follower_user_id = $1
+                    ORDER BY t.date_time DESC
+                    LIMIT 10
+                `, [user.user_id]);
+                
+                console.log(`Feed found ${tweets.length} tweets for user ${username} (PostgreSQL)`);
+            } catch (pgError) {
+                console.error("PostgreSQL tweet feed query error:", pgError);
+                console.error(pgError.stack);
+                tweets = [];
+            }
+        } else {
+            // For SQLite
+            const query = `
+                SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
+                FROM Tweet
+                JOIN Follower ON Tweet.user_id = Follower.following_user_id
+                JOIN User ON User.user_id = Tweet.user_id
+                WHERE Follower.follower_user_id = ?
+                ORDER BY Tweet.date_time DESC
+                LIMIT 10
+            `;
+            
+            const result = await dbHelpers.execute(query, [user.user_id]);
+            tweets = Array.isArray(result) ? result : [];
+            
+            console.log(`Feed found ${tweets.length} tweets for user ${username} (SQLite)`);
+        }
         
-        // Ensure dbResponse is an array before mapping
-        const tweets = Array.isArray(dbResponse) ? dbResponse.map(convertToCamelCaseForTweets) : [];
-        response.json(tweets);
+        // Convert to expected format
+        const formattedTweets = tweets.map(tweet => ({
+            username: tweet.username,
+            tweetId: tweet.tweet_id,
+            tweet: tweet.tweet,
+            dateTime: tweet.date_time
+        }));
+        
+        response.json(formattedTweets);
     } catch (error) {
         console.error("Error fetching tweet feed:", error);
-        console.error(error.stack); // Log the full stack trace
-        response.status(500).json({ error: "Server error", message: error.message });
+        console.error(error.stack);
+        response.status(500).json({ 
+            error: "Server error", 
+            message: error.message,
+            details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+        });
     }
 });
 
