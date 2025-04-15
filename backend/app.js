@@ -11,52 +11,37 @@ const dotenv = require('dotenv')
 const fs = require('fs')
 dotenv.config();
 
-// Define allowed origins with a wildcard fallback for development
-const allowedOrigins = process.env.NODE_ENV === 'production' 
-    ? ['https://vyshnavi005-max.github.io', 'https://twitter-clone-backend-534j.onrender.com', '*'] 
-    : ['http://localhost:3001', 'http://localhost:3000', '*'];
+// CORS settings
+const allowedOrigins = [
+    'http://localhost:3000',
+    'https://vyshnavi005-max.github.io',
+    'https://twitter-clone-backend-534j.onrender.com',
+];
 
-// Clear any existing CORS middleware
-app.use((req, res, next) => {
-    const origin = req.headers.origin;
-    
-    // For null or undefined origins (like Postman)
-    if (!origin) {
-        res.header('Access-Control-Allow-Origin', '*');
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-        res.header('Access-Control-Allow-Credentials', 'true');
+app.use(cors({
+    origin: function (origin, callback) {
+        // Allow requests with no origin (like mobile apps, curl requests)
+        if (!origin) return callback(null, true);
         
-        if (req.method === 'OPTIONS') {
-            console.log(`Handling OPTIONS request from unknown origin`);
-            return res.status(200).end();
+        console.log("Request from origin:", origin);
+        
+        if (allowedOrigins.indexOf(origin) !== -1) {
+            console.log("Request from allowed origin:", origin);
+            callback(null, true);
+        } else {
+            console.log("Request from unauthorized origin:", origin);
+            callback(null, true); // Allow all origins for now
         }
-        
-        return next();
-    }
-    
-    // Check if the origin is allowed
-    if (allowedOrigins.includes(origin) || allowedOrigins.includes('*')) {
-        res.header('Access-Control-Allow-Origin', origin);
-        res.header('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
-        res.header('Access-Control-Allow-Headers', 'Origin, X-Requested-With, Content-Type, Accept, Authorization');
-        res.header('Access-Control-Allow-Credentials', 'true');
-        
-        console.log(`Request from allowed origin: ${origin}`);
-    } else {
-        console.log(`Request from disallowed origin: ${origin}`);
-    }
-    
-    // Handle preflight OPTIONS requests
-    if (req.method === 'OPTIONS') {
-        console.log(`Handling OPTIONS request from ${origin || 'Unknown Origin'}`);
-        return res.status(200).end();
-    }
-    
-    // Log all requests for debugging
-    console.log(`${req.method} ${req.url} from ${origin || 'Unknown Origin'}`);
-    
-    next();
+    },
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
+}));
+
+// Handle preflight OPTIONS requests
+app.options('*', (req, res) => {
+    console.log("Preflight OPTIONS request received");
+    res.status(200).end();
 });
 
 // Add express.json middleware
@@ -1165,28 +1150,58 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
             return response.status(400).json({ error: "Tweet cannot be empty" });
         }
 
-        // Insert tweet
-        const query = process.env.NODE_ENV === 'production'
-            ? 'INSERT INTO "Tweet" (tweet, user_id) VALUES ($1, $2) RETURNING tweet_id, date_time'
-            : 'INSERT INTO Tweet (tweet, user_id) VALUES (?, ?)';
-            
-        const result = await dbHelpers.execute(query, [tweet, user.user_id]);
-        console.log('Tweet created successfully');
+        // Insert tweet - handle differently for PostgreSQL vs SQLite
+        let tweetId, dateTime;
+        
+        if (process.env.NODE_ENV === 'production') {
+            // For PostgreSQL
+            try {
+                console.log("Using PostgreSQL insert with RETURNING");
+                const result = await db.one('INSERT INTO "Tweet" (tweet, user_id, date_time) VALUES ($1, $2, CURRENT_TIMESTAMP) RETURNING tweet_id, date_time', 
+                    [tweet, user.user_id]);
+                tweetId = result.tweet_id;
+                dateTime = result.date_time;
+                console.log(`Tweet created with ID: ${tweetId}`);
+            } catch (pgError) {
+                console.error("PostgreSQL insert error:", pgError);
+                throw pgError;
+            }
+        } else {
+            // For SQLite
+            try {
+                console.log("Using SQLite insert");
+                const result = await db.run('INSERT INTO Tweet (tweet, user_id) VALUES (?, ?)', 
+                    [tweet, user.user_id]);
+                tweetId = result.lastID;
+                dateTime = new Date().toISOString();
+                console.log(`Tweet created with ID: ${tweetId}`);
+            } catch (sqliteError) {
+                console.error("SQLite insert error:", sqliteError);
+                throw sqliteError;
+            }
+        }
+
+        console.log('Tweet created successfully with ID:', tweetId);
 
         return response.status(201).json({
             message: "Created a Tweet",
             tweet: {
-                tweet,
+                tweetId: tweetId,
+                tweet: tweet,
                 likes: 0,
                 replies: 0,
-                dateTime: new Date().toISOString()
+                dateTime: dateTime || new Date().toISOString()
             }
         });
           
     } catch (error) {
         console.error("Error posting tweet:", error);
         console.error(error.stack);
-        return response.status(500).json({ error: "Internal Server Error", message: error.message });
+        return response.status(500).json({ 
+            error: "Error creating tweet", 
+            message: error.message,
+            details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+        });
     }
 });
 
