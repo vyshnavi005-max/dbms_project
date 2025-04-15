@@ -576,27 +576,35 @@ app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
       }
       
       let likes = [];
+      let userHasLiked = false;
       
       if (process.env.NODE_ENV === 'production') {
           try {
-              // Get all likes for this tweet without any filtering
+              // Get all likes for this tweet
               likes = await db.any(`
-                  SELECT u.name
+                  SELECT u.name, u.username, u.user_id
                   FROM "Like" l
                   JOIN "User" u ON l.user_id = u.user_id
                   WHERE l.tweet_id = $1
               `, [tweetId]);
               
-              console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL)`);
+              // Check if current user has liked
+              userHasLiked = await db.oneOrNone(`
+                  SELECT 1
+                  FROM "Like" l
+                  WHERE l.user_id = $1 AND l.tweet_id = $2
+              `, [user.user_id, tweetId]) !== null;
+              
+              console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL), user has liked: ${userHasLiked}`);
           } catch (pgError) {
               console.error("PostgreSQL query error:", pgError);
               console.error(pgError.stack);
               likes = [];
           }
       } else {
-          // SQLite - get all likes without any filtering
+          // SQLite - get all likes
           const query = `
-              SELECT u.name
+              SELECT u.name, u.username, u.user_id
               FROM Like l
               JOIN User u ON l.user_id = u.user_id
               WHERE l.tweet_id = ?
@@ -604,18 +612,35 @@ app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
           
           const result = await dbHelpers.execute(query, [tweetId]);
           likes = Array.isArray(result) ? result : [];
-          console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
+          
+          // Check if current user has liked
+          const userLikeQuery = `
+              SELECT 1
+              FROM Like l
+              WHERE l.user_id = ? AND l.tweet_id = ?
+          `;
+          const userLike = await dbHelpers.execute(userLikeQuery, [user.user_id, tweetId]);
+          userHasLiked = !!userLike;
+          
+          console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite), user has liked: ${userHasLiked}`);
       }
       
-      // Format likes array to match EXACTLY what frontend expects
+      // Format likes array
       const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
           tweetId: parseInt(tweetId),
           name: item?.name || ''
       })) : [];
       
-      console.log(`Response for tweet ${tweetId} likes:`, formattedLikes);
+      // Add user has liked information
+      const response = {
+          likes: formattedLikes,
+          hasLiked: userHasLiked,
+          currentUser: username
+      };
       
-      return res.json(formattedLikes);
+      console.log(`Response for tweet ${tweetId} likes:`, response);
+      
+      return res.json(response);
   } catch (error) {
       console.error("Error fetching likes:", error);
       console.error(error.stack);
@@ -805,8 +830,12 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
         let likes = [];
         if (process.env.NODE_ENV === 'production') {
             try {
-                likes = await db.any('SELECT u.username FROM "Like" l JOIN "User" u ON l.user_id = u.user_id WHERE l.tweet_id = $1',
-                    [tweetId]);
+                likes = await db.any(`
+                    SELECT u.name, u.username 
+                    FROM "Like" l 
+                    JOIN "User" u ON l.user_id = u.user_id 
+                    WHERE l.tweet_id = $1
+                `, [tweetId]);
                 console.log(`Updated likes for tweet ${tweetId}:`, likes.length);
             } catch (pgError) {
                 console.error("PostgreSQL select error:", pgError);
@@ -814,15 +843,27 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
             }
         } else {
             const result = await dbHelpers.execute(
-                'SELECT u.username FROM Like l JOIN User u ON l.user_id = u.user_id WHERE l.tweet_id = ?',
+                `SELECT u.name, u.username 
+                FROM Like l 
+                JOIN User u ON l.user_id = u.user_id 
+                WHERE l.tweet_id = ?`,
                 [tweetId]
             );
             likes = Array.isArray(result) ? result : [];
         }
         
+        // Format likes in the same format as GET /tweets/:tweetId/likes
+        const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
+            tweetId: parseInt(tweetId),
+            name: item?.name || ''
+        })) : [];
+        
+        const hasLiked = !existingLike; // If it was liked before, it's unliked now, and vice versa
+        
         response.json({
             message: existingLike ? "Tweet unliked successfully" : "Tweet liked successfully",
-            likes: Array.isArray(likes) ? likes.map(like => like.username) : [],
+            likes: formattedLikes,
+            hasLiked: hasLiked,
             currentUser: username
         });
     } catch (err) {
