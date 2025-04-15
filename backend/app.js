@@ -69,9 +69,9 @@ const initializeServer = async () => {
     } else {
       // Use SQLite for development
       const dbPath = path.join(__dirname, './database/twitterClone.db');
-      db = await open({
-        filename: dbPath,
-        driver: sqlite3.Database,
+    db = await open({
+      filename: dbPath,
+      driver: sqlite3.Database,
       });
       console.log("SQLite database connected successfully");
     }
@@ -277,15 +277,15 @@ const dbHelpers = {
 const authenticateToken = async (request, response, next) => {
     try {
         // Extract token from Authorization header or cookies
-        const authHeader = request.headers['authorization'];
-        const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
-        const cookieToken = request.cookies.token || request.cookies.jwtToken;
-        
+    const authHeader = request.headers['authorization'];
+    const bearerToken = authHeader && authHeader.startsWith("Bearer ") ? authHeader.split(" ")[1] : null;
+    const cookieToken = request.cookies.token || request.cookies.jwtToken;
+
         // Choose which token to use (prefer header token over cookie token)
-        const jwtToken = bearerToken || cookieToken;
-        
-        if (!jwtToken) {
-            console.log("No JWT token found in headers or cookies");
+    const jwtToken = bearerToken || cookieToken;
+
+    if (!jwtToken) {
+        console.log("No JWT token found in headers or cookies");
             return response.status(401).json({ 
                 error: "Authentication required", 
                 message: "Please log in to access this resource"
@@ -349,15 +349,15 @@ app.post("/register", async (request, response) => {
     try {
         console.log("Register request received:", request.body);
         const { username, password, name, gender } = request.body;
-        const validGenders = ["Male", "Female", "Other"];
+    const validGenders = ["Male", "Female", "Other"];
         
         if (!username || !password || !name || !gender) {
             return response.status(400).send("All fields (username, password, name, gender) are required");
         }
         
-        if (!validGenders.includes(gender)) {
-            return response.status(400).send("Invalid gender. Choose 'Male', 'Female', or 'Other'.");
-        }
+    if (!validGenders.includes(gender)) {
+        return response.status(400).send("Invalid gender. Choose 'Male', 'Female', or 'Other'.");
+    }
         
         if (password.length < 6) {
             return response.status(400).send('Password is too short');
@@ -410,17 +410,17 @@ app.post("/login", async (request, response) => {
         // Fetch user based on environment
         user = await dbHelpers.getUserByUsername(username);
         
-        if (!user) {
+    if (!user) {
             return response.status(401).json({ 
                 success: false,
                 message: "Invalid username or password" 
             });
-        }
-        
+    }
+
         // Compare password
-        const passwordMatch = await bcrypt.compare(password, user.password);
+    const passwordMatch = await bcrypt.compare(password, user.password);
         
-        if (!passwordMatch) {
+    if (!passwordMatch) {
             return response.status(401).json({ 
                 success: false,
                 message: "Invalid username or password" 
@@ -479,7 +479,7 @@ const convertToCamelCaseForTweets = (tweets) => ({
 // Get Feed of Tweets
 app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+    const { username } = request.user;
         console.log(`Fetching tweet feed for user: ${username}`);
         
         // Get current user
@@ -515,12 +515,12 @@ app.get('/user/tweets/feed/', authenticateToken, async (request, response) => {
         } else {
             // For SQLite
             const query = `
-                SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
-                FROM Tweet
-                JOIN Follower ON Tweet.user_id = Follower.following_user_id
+        SELECT User.username, Tweet.tweet_id, Tweet.tweet, Tweet.date_time
+        FROM Tweet
+        JOIN Follower ON Tweet.user_id = Follower.following_user_id
                 JOIN User ON User.user_id = Tweet.user_id
                 WHERE Follower.follower_user_id = ?
-                ORDER BY Tweet.date_time DESC
+        ORDER BY Tweet.date_time DESC
                 LIMIT 10
             `;
             
@@ -555,11 +555,11 @@ const likedNames = (data) => {
   // Ensure data is an array
   const safeData = Array.isArray(data) ? data : [];
   const names = safeData.map((item) => item?.name || '');
-  return {
-    likes: names,
-    hasLiked: names.length > 0,
+    return {
+      likes: names,
+      hasLiked: names.length > 0,
+    };
   };
-};
   
 app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
   try {
@@ -625,15 +625,12 @@ app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
           console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite), user has liked: ${userHasLiked}`);
       }
       
-      // Format likes array
-      const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
-          tweetId: parseInt(tweetId),
-          name: item?.name || ''
-      })) : [];
+      // Format likes array - Frontend expects an array of strings (just the names)
+      const likesArray = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
       
-      // Add user has liked information
+      // Response matching what the frontend expects
       const response = {
-          likes: formattedLikes,
+          likes: likesArray,
           hasLiked: userHasLiked,
           currentUser: username
       };
@@ -657,13 +654,13 @@ const repliesNames = (item) => {
     name: item?.name || '', 
     reply: item?.reply || '' 
   };
-};
+  };
   
 app.get("/tweets/:tweetId/replies", authenticateToken, async (req, res) => {
   try {
-      const { username } = req.user;
-      const { tweetId } = req.params;
-      
+    const { username } = req.user;
+    const { tweetId } = req.params;
+  
       console.log(`User ${username} requesting replies for tweet ${tweetId}`);
       
       // Get user
@@ -695,10 +692,10 @@ app.get("/tweets/:tweetId/replies", authenticateToken, async (req, res) => {
       } else {
           // SQLite - get ALL replies without filtering
           const query = `
-              SELECT u.name, r.reply
+        SELECT u.name, r.reply
               FROM Reply r
               JOIN User u ON r.user_id = u.user_id
-              WHERE r.tweet_id = ?
+        WHERE r.tweet_id = ?
               ORDER BY r.date_time DESC
           `;
           
@@ -719,7 +716,7 @@ app.get("/tweets/:tweetId/replies", authenticateToken, async (req, res) => {
       console.log(`Response for tweet ${tweetId} replies:`, formattedReplies);
       
       return res.json(formattedReplies);
-  } catch (error) {
+    } catch (error) {
       console.error("Error fetching replies:", error);
       console.error(error.stack);
       return res.status(500).json({ 
@@ -727,8 +724,8 @@ app.get("/tweets/:tweetId/replies", authenticateToken, async (req, res) => {
           message: error.message,
           details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
       });
-  }
-});
+    }
+  });
   
 
 // Like a tweet
@@ -770,7 +767,7 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
                 [user.user_id, tweetId]
             );
         }
-        
+
         if (existingLike) {
             // Unlike
             if (process.env.NODE_ENV === 'production') {
@@ -782,7 +779,7 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
                     console.error("PostgreSQL delete error:", pgError);
                     throw pgError;
                 }
-            } else {
+        } else {
                 await dbHelpers.execute(
                     'DELETE FROM Like WHERE user_id = ? AND tweet_id = ?',
                     [user.user_id, tweetId]
@@ -831,7 +828,7 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
         if (process.env.NODE_ENV === 'production') {
             try {
                 likes = await db.any(`
-                    SELECT u.name, u.username 
+                    SELECT u.name
                     FROM "Like" l 
                     JOIN "User" u ON l.user_id = u.user_id 
                     WHERE l.tweet_id = $1
@@ -843,26 +840,23 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
             }
         } else {
             const result = await dbHelpers.execute(
-                `SELECT u.name, u.username 
-                FROM Like l 
-                JOIN User u ON l.user_id = u.user_id 
+                `SELECT u.name
+                FROM Like l
+                JOIN User u ON l.user_id = u.user_id
                 WHERE l.tweet_id = ?`,
                 [tweetId]
             );
             likes = Array.isArray(result) ? result : [];
         }
         
-        // Format likes in the same format as GET /tweets/:tweetId/likes
-        const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
-            tweetId: parseInt(tweetId),
-            name: item?.name || ''
-        })) : [];
+        // Extract just the names as an array of strings
+        const nameArray = likes.map(item => item.name || '');
         
         const hasLiked = !existingLike; // If it was liked before, it's unliked now, and vice versa
-        
+
         response.json({
             message: existingLike ? "Tweet unliked successfully" : "Tweet liked successfully",
-            likes: formattedLikes,
+            likes: nameArray,
             hasLiked: hasLiked,
             currentUser: username
         });
@@ -880,10 +874,10 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
 // Reply to a tweet
 app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
-        const { tweetId } = request.params;
-        const { replyText } = request.body;
-        
+    const { username } = request.user;
+    const { tweetId } = request.params;
+    const { replyText } = request.body;
+
         console.log(`User ${username} attempting to reply to tweet ${tweetId}`);
         
         if (!replyText || replyText.trim() === '') {
@@ -992,10 +986,10 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
             }
         } else {
             const result = await dbHelpers.execute(`
-                SELECT u.name, r.reply
-                FROM Reply r
-                JOIN User u ON r.user_id = u.user_id
-                WHERE r.tweet_id = ?
+            SELECT u.name, r.reply
+            FROM Reply r
+            JOIN User u ON r.user_id = u.user_id
+            WHERE r.tweet_id = ?
                 ORDER BY r.date_time DESC
             `, [tweetId]);
             replies = Array.isArray(result) ? result : [];
@@ -1005,7 +999,7 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
             name: item.name,
             reply: item.reply
         }));
-        
+
         response.json({
             message: "Reply added successfully",
             replies: formattedReplies
@@ -1101,7 +1095,7 @@ app.get('/profile', authenticateToken, async (req, res) => {
   
 app.get("/user/followers/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+   const { username } = request.user;
         console.log(`Fetching followers for user: ${username}`);
         
         // Get user
@@ -1162,7 +1156,7 @@ app.get("/user/followers/", authenticateToken, async (request, response) => {
 
 app.get("/user/following/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+   const { username } = request.user;
         console.log(`Fetching following for user: ${username}`);
         
         // Get user
@@ -1232,14 +1226,14 @@ const convertsnakecaseToCamelCase=(tweetDetails)=>{
 }
 app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
-        const { tweetId } = request.params;
+    const { username } = request.user;
+    const { tweetId } = request.params;
         
         console.log(`User ${username} requesting tweet ${tweetId}`);
         
         // Get user
         const user = await dbHelpers.getUserByUsername(username);
-        if (!user) {
+    if (!user) {
             console.log(`User ${username} not found in database`);
             return response.status(400).json({ error: "User not found" });
         }
@@ -1250,7 +1244,7 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
             try {
                 // Use db.oneOrNone for PostgreSQL - we expect at most one result
                 tweet = await db.oneOrNone(`
-                    SELECT 
+        SELECT 
                         t.tweet_id,
                         t.tweet,
                         COUNT(DISTINCT l.like_id) AS likes,
@@ -1280,13 +1274,13 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
             const query = `
                 SELECT 
                     t.tweet_id,
-                    t.tweet,
-                    COUNT(DISTINCT l.like_id) AS likes,
-                    COUNT(DISTINCT r.reply_id) AS replies,
-                    t.date_time
-                FROM Tweet t
-                LEFT JOIN Like l ON t.tweet_id = l.tweet_id
-                LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
+            t.tweet,
+            COUNT(DISTINCT l.like_id) AS likes,
+            COUNT(DISTINCT r.reply_id) AS replies,
+            t.date_time
+        FROM Tweet t
+        LEFT JOIN Like l ON t.tweet_id = l.tweet_id
+        LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
                 WHERE t.tweet_id = ?  
                 AND (
                     t.user_id IN (
@@ -1333,7 +1327,7 @@ const convertToCamelCaseForReplies=(replies)=>({
 })
 app.get("/user/tweets/replies/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+    const { username } = request.user;
         console.log(`User ${username} requesting tweet replies`);
         
         // Get user
@@ -1398,7 +1392,7 @@ app.get("/user/tweets/replies/", authenticateToken, async (request, response) =>
                 // First get all user tweets
                 const tweetsQuery = `
                     SELECT t.tweet_id, t.tweet, t.date_time
-                    FROM Tweet t
+      FROM Tweet t 
                     WHERE t.user_id = ?
                     ORDER BY t.date_time DESC
                 `;
@@ -1412,7 +1406,7 @@ app.get("/user/tweets/replies/", authenticateToken, async (request, response) =>
                     const repliesQuery = `
                         SELECT r.reply_id, r.reply, u.name, u.username, r.date_time
                         FROM Reply r
-                        JOIN User u ON r.user_id = u.user_id
+      JOIN User u ON r.user_id = u.user_id 
                         WHERE r.tweet_id = ?
                         ORDER BY r.date_time DESC
                     `;
@@ -1480,9 +1474,9 @@ const convertToCamelCaseForLikes = (replies) => ({
     name: replies.name
 });
 
-app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
+  app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+    const { username } = request.user;
         console.log(`User ${username} requesting tweet likes`);
         
         // Get user
@@ -1519,9 +1513,9 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
                 SELECT 
                     t.tweet_id, 
                     u.name 
-                FROM Tweet t
-                JOIN Like l ON t.tweet_id = l.tweet_id
-                JOIN User u ON l.user_id = u.user_id
+      FROM Tweet t 
+      JOIN Like l ON t.tweet_id = l.tweet_id 
+      JOIN User u ON l.user_id = u.user_id 
                 WHERE t.user_id = ?
             `;
             
@@ -1557,7 +1551,7 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
         console.log(`User ${username} attempting to create a new tweet`);
-        
+
         // Get user
         const user = await dbHelpers.getUserByUsername(username);
         if (!user) {
@@ -1624,11 +1618,11 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
             tweet: {
                 tweetId: tweetId,
                 tweet: tweet,
-                likes: 0,
-                replies: 0,
+              likes: 0,
+              replies: 0,
                 dateTime: dateTime || new Date().toISOString()
             }
-        });
+          });
           
     } catch (error) {
         console.error("Error posting tweet:", error);
@@ -1643,7 +1637,7 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
 
 app.get("/user/tweets/", authenticateToken, async (request, response) => {
     try {
-        const { username } = request.user;
+    const { username } = request.user;
         console.log(`User ${username} requesting their tweets`);
         
         // Get user
@@ -1918,8 +1912,8 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
 
 // Add suggestions endpoint
 app.get('/suggestions', authenticateToken, async (request, response) => {
-  try {
-    const { username } = request.user;
+    try {
+        const { username } = request.user;
     console.log(`User ${username} requesting suggestions`);
     
     // Get current user
@@ -1958,24 +1952,24 @@ app.get('/suggestions', authenticateToken, async (request, response) => {
     } else {
       // SQLite - continue using dbHelpers.execute
       const query = `
-        SELECT u.user_id, u.name, u.username 
-        FROM User u
-        WHERE u.user_id != ?
-        AND u.user_id NOT IN (
+            SELECT u.user_id, u.name, u.username 
+            FROM User u
+            WHERE u.user_id != ? 
+            AND u.user_id NOT IN (
           SELECT f.following_user_id 
           FROM Follower f
           WHERE f.follower_user_id = ?
         )
-        LIMIT 5
+            LIMIT 5
       `;
-      
+
       const result = await dbHelpers.execute(query, [currentUser.user_id, currentUser.user_id]);
       suggestions = Array.isArray(result) ? result : [];
       console.log(`Found ${suggestions.length} suggestions for user ${username}`);
-    }
-    
-    response.json(suggestions);
-  } catch (error) {
+        }
+
+        response.json(suggestions);
+    } catch (error) {
     console.error('Error fetching suggestions:', error);
     console.error(error.stack);
     response.status(500).json({ 
@@ -2105,7 +2099,7 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
         message: `You are now following ${userToFollow.username}` 
       });
     }
-  } catch (error) {
+    } catch (error) {
     console.error('Error following user:', error);
     console.error(error.stack);
     response.status(500).json({ 
