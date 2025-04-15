@@ -1317,51 +1317,126 @@ app.get("/user/tweets/replies/", authenticateToken, async (request, response) =>
             return response.status(400).json({ error: "User not found" });
         }
         
-        let replies = [];
+        let userTweets = [];
         
         if (process.env.NODE_ENV === 'production') {
             try {
-                // Use db.any for PostgreSQL
-                replies = await db.any(`
-                    SELECT t.tweet_id, u.name, r.reply 
-                    FROM "Tweet" t 
-                    JOIN "Reply" r ON t.tweet_id = r.tweet_id 
-                    JOIN "User" u ON r.user_id = u.user_id 
+                // First get all user tweets
+                const tweets = await db.any(`
+                    SELECT t.tweet_id, t.tweet, t.date_time
+                    FROM "Tweet" t
                     WHERE t.user_id = $1
-                    ORDER BY r.date_time DESC
+                    ORDER BY t.date_time DESC
                 `, [user.user_id]);
                 
-                console.log(`Found ${replies.length} replies for user's tweets (PostgreSQL)`);
+                console.log(`Found ${tweets.length} tweets for user ${username} (PostgreSQL)`);
+                
+                // For each tweet, get its replies
+                for (const tweet of tweets) {
+                    const repliesForTweet = await db.any(`
+                        SELECT r.reply_id, r.reply, u.name, u.username, r.date_time
+                        FROM "Reply" r
+                        JOIN "User" u ON r.user_id = u.user_id
+                        WHERE r.tweet_id = $1
+                        ORDER BY r.date_time DESC
+                    `, [tweet.tweet_id]);
+                    
+                    if (repliesForTweet.length > 0) {
+                        // Convert replies to the expected format
+                        const formattedReplies = repliesForTweet.map(reply => ({
+                            replyId: reply.reply_id,
+                            name: reply.name || '',
+                            username: reply.username || '',
+                            reply: reply.reply || '',
+                            dateTime: reply.date_time
+                        }));
+                        
+                        // Add tweet with its replies to the result
+                        userTweets.push({
+                            tweetId: tweet.tweet_id,
+                            tweet: tweet.tweet,
+                            dateTime: tweet.date_time,
+                            replies: formattedReplies
+                        });
+                    }
+                }
+                
+                console.log(`Processed replies for ${userTweets.length} tweets with replies (PostgreSQL)`);
             } catch (pgError) {
                 console.error("PostgreSQL query error:", pgError);
                 console.error(pgError.stack);
-                replies = [];
             }
         } else {
-            // SQLite
-            const query = `
-                SELECT t.tweet_id, u.name, r.reply 
-                FROM Tweet t 
-                JOIN Reply r ON t.tweet_id = r.tweet_id 
-                JOIN User u ON r.user_id = u.user_id 
-                WHERE t.user_id = ?
-                ORDER BY r.date_time DESC
-            `;
-            
-            const result = await dbHelpers.execute(query, [user.user_id]);
-            replies = Array.isArray(result) ? result : [];
-            console.log(`Found ${replies.length} replies for user's tweets (SQLite)`);
+            // SQLite version
+            try {
+                // First get all user tweets
+                const tweetsQuery = `
+                    SELECT t.tweet_id, t.tweet, t.date_time
+                    FROM Tweet t
+                    WHERE t.user_id = ?
+                    ORDER BY t.date_time DESC
+                `;
+                
+                const tweetsResult = await dbHelpers.execute(tweetsQuery, [user.user_id]);
+                const tweets = Array.isArray(tweetsResult) ? tweetsResult : [];
+                console.log(`Found ${tweets.length} tweets for user ${username} (SQLite)`);
+                
+                // For each tweet, get its replies
+                for (const tweet of tweets) {
+                    const repliesQuery = `
+                        SELECT r.reply_id, r.reply, u.name, u.username, r.date_time
+                        FROM Reply r
+                        JOIN User u ON r.user_id = u.user_id
+                        WHERE r.tweet_id = ?
+                        ORDER BY r.date_time DESC
+                    `;
+                    
+                    const repliesResult = await dbHelpers.execute(repliesQuery, [tweet.tweet_id]);
+                    const repliesForTweet = Array.isArray(repliesResult) ? repliesResult : [];
+                    
+                    if (repliesForTweet.length > 0) {
+                        // Convert replies to the expected format
+                        const formattedReplies = repliesForTweet.map(reply => ({
+                            replyId: reply.reply_id,
+                            name: reply.name || '',
+                            username: reply.username || '',
+                            reply: reply.reply || '',
+                            dateTime: reply.date_time
+                        }));
+                        
+                        // Add tweet with its replies to the result
+                        userTweets.push({
+                            tweetId: tweet.tweet_id,
+                            tweet: tweet.tweet,
+                            dateTime: tweet.date_time,
+                            replies: formattedReplies
+                        });
+                    }
+                }
+                
+                console.log(`Processed replies for ${userTweets.length} tweets with replies (SQLite)`);
+            } catch (sqliteError) {
+                console.error("SQLite query error:", sqliteError);
+                console.error(sqliteError.stack);
+            }
         }
         
-        // Ensure we're always returning an array with properly formatted objects
-        const formattedReplies = Array.isArray(replies) 
-            ? replies.map(reply => ({
-                tweetId: reply?.tweet_id || 0,
-                name: reply?.name || '',
-                reply: reply?.reply || ''
-            }))
-            : [];
-            
+        // Flatten the result to match expected format - one entry per reply
+        const formattedReplies = [];
+        
+        userTweets.forEach(tweet => {
+            if (tweet.replies && tweet.replies.length > 0) {
+                tweet.replies.forEach(reply => {
+                    formattedReplies.push({
+                        tweetId: tweet.tweetId,
+                        name: reply.name,
+                        reply: reply.reply
+                    });
+                });
+            }
+        });
+        
+        console.log(`Returning ${formattedReplies.length} formatted replies`);
         response.json(formattedReplies);
     } catch (error) {
         console.error("Error fetching tweet replies:", error);
@@ -1395,14 +1470,15 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
         
         if (process.env.NODE_ENV === 'production') {
             try {
-                // Use db.any for PostgreSQL - returns empty array when no results
+                // Direct query to get all likes for all user's tweets
                 likes = await db.any(`
-                    SELECT t.tweet_id, u.name 
-                    FROM "Tweet" t 
-                    JOIN "Like" l ON t.tweet_id = l.tweet_id 
-                    JOIN "User" u ON l.user_id = u.user_id 
+                    SELECT 
+                        t.tweet_id, 
+                        u.name 
+                    FROM "Tweet" t
+                    JOIN "Like" l ON t.tweet_id = l.tweet_id
+                    JOIN "User" u ON l.user_id = u.user_id
                     WHERE t.user_id = $1
-                    ORDER BY l.date_time DESC
                 `, [user.user_id]);
                 
                 console.log(`Found ${likes.length} likes for user's tweets (PostgreSQL)`);
@@ -1412,14 +1488,15 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
                 likes = [];
             }
         } else {
-            // For SQLite
+            // SQLite query to get all likes for all user's tweets
             const query = `
-                SELECT t.tweet_id, u.name 
-                FROM Tweet t 
-                JOIN Like l ON t.tweet_id = l.tweet_id 
-                JOIN User u ON l.user_id = u.user_id 
+                SELECT 
+                    t.tweet_id, 
+                    u.name 
+                FROM Tweet t
+                JOIN Like l ON t.tweet_id = l.tweet_id
+                JOIN User u ON l.user_id = u.user_id
                 WHERE t.user_id = ?
-                ORDER BY l.date_time DESC
             `;
             
             const result = await dbHelpers.execute(query, [user.user_id]);
@@ -1427,13 +1504,14 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
             console.log(`Found ${likes.length} likes for user's tweets (SQLite)`);
         }
         
-        // Format the likes properly with null safety
-        const formattedLikes = Array.isArray(likes) 
-            ? likes.map(like => ({
-                tweetId: like?.tweet_id || 0,
-                name: like?.name || ''
-            }))
-            : [];
+        // Format to expected structure - directly map the results
+        const formattedLikes = likes.map(like => ({
+            tweetId: like.tweet_id,
+            name: like.name
+        }));
+        
+        console.log(`Returning ${formattedLikes.length} likes - sample:`, 
+            formattedLikes.length > 0 ? formattedLikes[0] : "No likes found");
         
         response.json(formattedLikes);
     } catch (error) {
