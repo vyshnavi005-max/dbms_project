@@ -576,26 +576,27 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
       }
       
       let likes = [];
+      let hasUserLiked = false;
       
       if (process.env.NODE_ENV === 'production') {
           try {
-              // Use db.any for PostgreSQL - safer as it returns empty array when no results
+              // First check if current user has liked this tweet
+              const userLike = await db.oneOrNone(`
+                  SELECT 1 
+                  FROM "Like" 
+                  WHERE user_id = $1 AND tweet_id = $2
+              `, [user.user_id, tweetId]);
+              
+              hasUserLiked = !!userLike;
+              console.log(`Has user ${username} liked tweet ${tweetId}? ${hasUserLiked}`);
+              
+              // Get all likes for this tweet without any filtering
               likes = await db.any(`
                   SELECT u.name
                   FROM "Like" l
                   JOIN "User" u ON l.user_id = u.user_id
                   WHERE l.tweet_id = $1
-                  AND l.tweet_id IN (
-                      SELECT t.tweet_id
-                      FROM "Tweet" t
-                      WHERE t.user_id IN (
-                          SELECT f.following_user_id 
-                          FROM "Follower" f 
-                          WHERE f.follower_user_id = $2
-                      )
-                      OR t.user_id = $2
-                  )
-              `, [tweetId, user.user_id]);
+              `, [tweetId]);
               
               console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL)`);
           } catch (pgError) {
@@ -604,25 +605,24 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
               likes = [];
           }
       } else {
-          // SQLite
+          // First check if current user has liked this tweet
+          const userLike = await dbHelpers.execute(
+              'SELECT 1 FROM Like WHERE user_id = ? AND tweet_id = ?',
+              [user.user_id, tweetId]
+          );
+          
+          hasUserLiked = !!userLike;
+          console.log(`Has user ${username} liked tweet ${tweetId}? ${hasUserLiked}`);
+          
+          // SQLite - get all likes without any filtering
           const query = `
               SELECT u.name
-              FROM "Like" l
-              JOIN "User" u ON l.user_id = u.user_id
+              FROM Like l
+              JOIN User u ON l.user_id = u.user_id
               WHERE l.tweet_id = ?
-              AND l.tweet_id IN (
-                  SELECT t.tweet_id
-                  FROM "Tweet" t
-                  WHERE t.user_id IN (
-                      SELECT f.following_user_id 
-                      FROM "Follower" f 
-                      WHERE f.follower_user_id = ?
-                  )
-                  OR t.user_id = ?
-              )
           `;
           
-          const result = await dbHelpers.execute(query, [tweetId, user.user_id, user.user_id]);
+          const result = await dbHelpers.execute(query, [tweetId]);
           likes = Array.isArray(result) ? result : [];
           console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite)`);
       }
@@ -632,7 +632,7 @@ app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
       
       return res.json({
           likes: likeNames,
-          hasLiked: likeNames.length > 0
+          hasLiked: hasUserLiked
       });
   } catch (error) {
       console.error("Error fetching likes:", error);
@@ -670,23 +670,14 @@ app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
       
       if (process.env.NODE_ENV === 'production') {
           try {
-              // Use db.any for PostgreSQL - returns empty array when no results
+              // Use db.any for PostgreSQL - get ALL replies without filtering
               replies = await db.any(`
                   SELECT u.name, r.reply
                   FROM "Reply" r
                   JOIN "User" u ON r.user_id = u.user_id
                   WHERE r.tweet_id = $1
-                  AND r.tweet_id IN (
-                      SELECT t.tweet_id
-                      FROM "Tweet" t
-                      WHERE t.user_id IN (
-                          SELECT f.following_user_id 
-                          FROM "Follower" f 
-                          WHERE f.follower_user_id = $2
-                      )
-                      OR t.user_id = $2
-                  )
-              `, [tweetId, user.user_id]);
+                  ORDER BY r.date_time DESC
+              `, [tweetId]);
               
               console.log(`Found ${replies.length} replies for tweet ${tweetId} (PostgreSQL)`);
           } catch (pgError) {
@@ -695,25 +686,16 @@ app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
               replies = [];
           }
       } else {
-          // SQLite
+          // SQLite - get ALL replies without filtering
           const query = `
               SELECT u.name, r.reply
-              FROM "Reply" r
-              JOIN "User" u ON r.user_id = u.user_id
+              FROM Reply r
+              JOIN User u ON r.user_id = u.user_id
               WHERE r.tweet_id = ?
-              AND r.tweet_id IN (
-                  SELECT t.tweet_id
-                  FROM "Tweet" t
-                  WHERE t.user_id IN (
-                      SELECT f.following_user_id 
-                      FROM "Follower" f 
-                      WHERE f.follower_user_id = ?
-                  )
-                  OR t.user_id = ?
-              )
+              ORDER BY r.date_time DESC
           `;
           
-          const result = await dbHelpers.execute(query, [tweetId, user.user_id, user.user_id]);
+          const result = await dbHelpers.execute(query, [tweetId]);
           replies = Array.isArray(result) ? result : [];
           console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
       }
@@ -1335,17 +1317,29 @@ app.get("/user/tweets/replies/", authenticateToken, async (request, response) =>
             return response.status(400).json({ error: "User not found" });
         }
         
-        // Query tweets replies
-        const query = process.env.NODE_ENV === 'production' 
-            ? `
-                SELECT t.tweet_id, u.name, r.reply 
-                FROM "Tweet" t 
-                JOIN "Reply" r ON t.tweet_id = r.tweet_id 
-                JOIN "User" u ON r.user_id = u.user_id 
-                WHERE t.user_id = $1
-                ORDER BY r.date_time DESC
-            `
-            : `
+        let replies = [];
+        
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                // Use db.any for PostgreSQL
+                replies = await db.any(`
+                    SELECT t.tweet_id, u.name, r.reply 
+                    FROM "Tweet" t 
+                    JOIN "Reply" r ON t.tweet_id = r.tweet_id 
+                    JOIN "User" u ON r.user_id = u.user_id 
+                    WHERE t.user_id = $1
+                    ORDER BY r.date_time DESC
+                `, [user.user_id]);
+                
+                console.log(`Found ${replies.length} replies for user's tweets (PostgreSQL)`);
+            } catch (pgError) {
+                console.error("PostgreSQL query error:", pgError);
+                console.error(pgError.stack);
+                replies = [];
+            }
+        } else {
+            // SQLite
+            const query = `
                 SELECT t.tweet_id, u.name, r.reply 
                 FROM Tweet t 
                 JOIN Reply r ON t.tweet_id = r.tweet_id 
@@ -1353,20 +1347,30 @@ app.get("/user/tweets/replies/", authenticateToken, async (request, response) =>
                 WHERE t.user_id = ?
                 ORDER BY r.date_time DESC
             `;
+            
+            const result = await dbHelpers.execute(query, [user.user_id]);
+            replies = Array.isArray(result) ? result : [];
+            console.log(`Found ${replies.length} replies for user's tweets (SQLite)`);
+        }
         
-        const replies = await dbHelpers.execute(query, [user.user_id]);
-        console.log(`Found ${replies ? replies.length : 0} replies for user's tweets`);
-        
-        // Ensure we're always returning an array
-        const result = Array.isArray(replies) 
-            ? replies.map(convertToCamelCaseForReplies) 
+        // Ensure we're always returning an array with properly formatted objects
+        const formattedReplies = Array.isArray(replies) 
+            ? replies.map(reply => ({
+                tweetId: reply?.tweet_id || 0,
+                name: reply?.name || '',
+                reply: reply?.reply || ''
+            }))
             : [];
             
-        response.json(result);
+        response.json(formattedReplies);
     } catch (error) {
         console.error("Error fetching tweet replies:", error);
         console.error(error.stack);
-        response.status(500).json({ error: "Internal Server Error", message: error.message });
+        response.status(500).json({ 
+            error: "Internal Server Error", 
+            message: error.message,
+            details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+        });
     }
 });
 
@@ -1391,7 +1395,7 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
         
         if (process.env.NODE_ENV === 'production') {
             try {
-                // Use db.any for PostgreSQL
+                // Use db.any for PostgreSQL - returns empty array when no results
                 likes = await db.any(`
                     SELECT t.tweet_id, u.name 
                     FROM "Tweet" t 
@@ -1423,13 +1427,15 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
             console.log(`Found ${likes.length} likes for user's tweets (SQLite)`);
         }
         
-        // Ensure we're always returning an array
-        const result = likes.map(like => ({
-            tweetId: like.tweet_id,
-            name: like.name
-        }));
+        // Format the likes properly with null safety
+        const formattedLikes = Array.isArray(likes) 
+            ? likes.map(like => ({
+                tweetId: like?.tweet_id || 0,
+                name: like?.name || ''
+            }))
+            : [];
         
-        response.json(result);
+        response.json(formattedLikes);
     } catch (error) {
         console.error("Error fetching tweet likes:", error);
         console.error(error.stack);
@@ -1712,13 +1718,13 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                     SELECT 
                         n.id as notification_id, 
                         n.message as content, 
-                        n.created_at as date_time, 
+                        COALESCE(n.created_at, CURRENT_TIMESTAMP) as date_time, 
                         n.is_read, 
                         u.username as triggered_by_username 
                     FROM "Notifications" n
                     LEFT JOIN "User" u ON n.from_user_id = u.user_id
                     WHERE n.user_id = $1
-                    ORDER BY n.created_at DESC
+                    ORDER BY n.created_at DESC NULLS LAST
                 `, [user.user_id]);
                 
                 console.log(`Found ${notifications.length} notifications for user ${username} (PostgreSQL)`);
@@ -1735,7 +1741,7 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
                     SELECT 
                         n.id as notification_id, 
                         n.message as content, 
-                        n.date_time, 
+                        COALESCE(n.date_time, datetime('now')) as date_time, 
                         n.is_read, 
                         u.username as triggered_by_username 
                     FROM Notifications n
@@ -1754,14 +1760,26 @@ app.get('/notifications/', authenticateToken, async (request, response) => {
             }
         }
         
-        // Normalize results
-        const normalizedNotifications = notifications.map(n => ({
-            notification_id: n?.notification_id || 0, 
-            content: n?.content || n?.message || '',
-            date_time: n?.date_time || new Date().toISOString(),
-            is_read: !!n?.is_read,
-            triggered_by_username: n?.triggered_by_username || null
-        }));
+        // Normalize results and ensure valid dates
+        const normalizedNotifications = notifications.map(n => {
+            // Ensure date is valid or use current date
+            let dateTime;
+            try {
+                // Try to parse the date, if it's invalid use current date
+                dateTime = n?.date_time ? new Date(n.date_time).toISOString() : new Date().toISOString();
+            } catch (e) {
+                console.error("Invalid date format:", n?.date_time);
+                dateTime = new Date().toISOString();
+            }
+            
+            return {
+                notification_id: n?.notification_id || 0, 
+                content: n?.content || n?.message || '',
+                date_time: dateTime,
+                is_read: !!n?.is_read,
+                triggered_by_username: n?.triggered_by_username || null
+            };
+        });
         
         return response.json(normalizedNotifications);
     } catch (error) {
