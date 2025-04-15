@@ -956,30 +956,54 @@ app.get("/user/followers/", authenticateToken, async (request, response) => {
         const { username } = request.user;
         console.log(`Fetching followers for user: ${username}`);
         
+        // Get user
         const user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).json({ error: "User not found" });
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
         console.log(`Got user with ID: ${user.user_id}`);
         
-        const query = process.env.NODE_ENV === 'production'
-            ? `
-                SELECT u.name
-                FROM "User" u
-                JOIN "Follower" f ON u.user_id = f.follower_user_id
-                WHERE f.following_user_id = $1
-            `
-            : `
-                SELECT u.name
+        let followers = [];
+        
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                // Use db.any for PostgreSQL
+                followers = await db.any(`
+                    SELECT u.name, u.username, u.user_id
+                    FROM "User" u
+                    JOIN "Follower" f ON u.user_id = f.follower_user_id
+                    WHERE f.following_user_id = $1
+                `, [user.user_id]);
+                
+                console.log(`Found ${followers.length} followers for ${username}`);
+            } catch (pgError) {
+                console.error("PostgreSQL query error:", pgError);
+                console.error(pgError.stack);
+                followers = [];
+            }
+        } else {
+            // SQLite - continue using dbHelpers.execute
+            const query = `
+                SELECT u.name, u.username, u.user_id
                 FROM User u
                 JOIN Follower f ON u.user_id = f.follower_user_id
                 WHERE f.following_user_id = ?
             `;
+            
+            const result = await dbHelpers.execute(query, [user.user_id]);
+            followers = Array.isArray(result) ? result : [];
+            console.log(`Found ${followers.length} followers (SQLite)`);
+        }
         
-        const followers = await dbHelpers.execute(query, [user.user_id]);
-        console.log(`Found ${followers ? followers.length : 0} followers`);
+        // Convert to expected format
+        const result = followers.map(user => ({
+            name: user.name,
+            username: user.username || '', 
+            user_id: user.user_id
+        }));
         
-        // Ensure we're always returning an array
-        const result = Array.isArray(followers) ? followers.map(convertToCamelCaseForFollowers) : [];
         response.json(result);
     } catch (error) {
         console.error("Error fetching followers:", error);
@@ -993,30 +1017,54 @@ app.get("/user/following/", authenticateToken, async (request, response) => {
         const { username } = request.user;
         console.log(`Fetching following for user: ${username}`);
         
+        // Get user
         const user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).json({ error: "User not found" });
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
         console.log(`Got user with ID: ${user.user_id}`);
         
-        const query = process.env.NODE_ENV === 'production'
-            ? `
-                SELECT u.name
-                FROM "User" u
-                JOIN "Follower" f ON u.user_id = f.following_user_id
-                WHERE f.follower_user_id = $1
-            `
-            : `
-                SELECT u.name
+        let following = [];
+        
+        if (process.env.NODE_ENV === 'production') {
+            try {
+                // Use db.any for PostgreSQL
+                following = await db.any(`
+                    SELECT u.name, u.username, u.user_id
+                    FROM "User" u
+                    JOIN "Follower" f ON u.user_id = f.following_user_id
+                    WHERE f.follower_user_id = $1
+                `, [user.user_id]);
+                
+                console.log(`Found ${following.length} users that ${username} is following`);
+            } catch (pgError) {
+                console.error("PostgreSQL query error:", pgError);
+                console.error(pgError.stack);
+                following = [];
+            }
+        } else {
+            // SQLite - continue using dbHelpers.execute
+            const query = `
+                SELECT u.name, u.username, u.user_id
                 FROM User u
                 JOIN Follower f ON u.user_id = f.following_user_id
                 WHERE f.follower_user_id = ?
             `;
+            
+            const result = await dbHelpers.execute(query, [user.user_id]);
+            following = Array.isArray(result) ? result : [];
+            console.log(`Found ${following.length} following (SQLite)`);
+        }
         
-        const following = await dbHelpers.execute(query, [user.user_id]);
-        console.log(`Found ${following ? following.length : 0} following`);
+        // Convert to expected format
+        const result = following.map(user => ({
+            name: user.name,
+            username: user.username || '',
+            user_id: user.user_id
+        }));
         
-        // Ensure we're always returning an array
-        const result = Array.isArray(following) ? following.map(convertToCamelCaseForFollowers) : [];
         response.json(result);
     } catch (error) {
         console.error("Error fetching following:", error);
@@ -1623,13 +1671,28 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
     
     console.log(`User ${username} (ID: ${currentUser.user_id}) attempting to follow/unfollow ${userToFollow.username} (ID: ${userToFollow.user_id})`);
     
-    // Check if already following
-    const checkQuery = process.env.NODE_ENV === 'production'
-        ? 'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
-        : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?';
+    // Check if already following - use db.oneOrNone for PostgreSQL to get exact results
+    let isAlreadyFollowing = false;
     
-    const isAlreadyFollowing = await dbHelpers.execute(checkQuery, [currentUser.user_id, userToFollow.user_id]);
-    console.log(`Is already following: ${!!isAlreadyFollowing}`);
+    if (process.env.NODE_ENV === 'production') {
+        try {
+            const result = await db.oneOrNone('SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
+                [currentUser.user_id, userToFollow.user_id]);
+            isAlreadyFollowing = !!result;
+            console.log(`Is already following (PostgreSQL check): ${isAlreadyFollowing}`);
+        } catch (pgError) {
+            console.error("PostgreSQL select error:", pgError);
+            isAlreadyFollowing = false;
+        }
+    } else {
+        // For SQLite
+        const result = await dbHelpers.execute(
+            'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?',
+            [currentUser.user_id, userToFollow.user_id]
+        );
+        isAlreadyFollowing = !!result;
+        console.log(`Is already following (SQLite check): ${isAlreadyFollowing}`);
+    }
     
     if (isAlreadyFollowing) {
       // Unfollow if already following
@@ -1679,19 +1742,21 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
       // Try to create notification
       try {
         if (process.env.NODE_ENV === 'production') {
+          // Fix: Notification INSERT should match table schema - without tweet_id for follow
           await db.none(
-            'INSERT INTO "Notifications" (user_id, from_user_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5)',
+            'INSERT INTO "Notifications" (user_id, from_user_id, type, message, is_read, created_at) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)',
             [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
           );
         } else {
           await dbHelpers.execute(
-            'INSERT INTO Notifications (user_id, from_user_id, type, message, is_read) VALUES (?, ?, ?, ?, ?)',
+            'INSERT INTO Notifications (user_id, from_user_id, type, message, is_read, date_time) VALUES (?, ?, ?, ?, ?, datetime("now"))',
             [userToFollow.user_id, currentUser.user_id, 'follow', `@${username} started following you.`, false]
           );
         }
         console.log(`Created follow notification for ${userToFollow.username}`);
       } catch (notifError) {
         console.error('Error creating follow notification:', notifError);
+        console.error(notifError.stack);
         // Continue even if notification creation fails
       }
       
