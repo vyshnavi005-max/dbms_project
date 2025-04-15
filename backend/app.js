@@ -625,19 +625,15 @@ app.get("/tweets/:tweetId/likes", authenticateToken, async (req, res) => {
           console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite), user has liked: ${userHasLiked}`);
       }
       
-      // Format likes array - Frontend expects an array of strings (just the names)
-      const likesArray = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
+      // Format likes array - Tweet.js expects an array of objects with tweetId and name
+      const formattedLikes = Array.isArray(likes) ? likes.map(item => ({
+          tweetId: parseInt(tweetId),
+          name: item?.name || ''
+      })) : [];
       
-      // Response matching what the frontend expects
-      const response = {
-          likes: likesArray,
-          hasLiked: userHasLiked,
-          currentUser: username
-      };
+      console.log(`Response for tweet ${tweetId} likes:`, formattedLikes);
       
-      console.log(`Response for tweet ${tweetId} likes:`, response);
-      
-      return res.json(response);
+      return res.json(formattedLikes);
   } catch (error) {
       console.error("Error fetching likes:", error);
       console.error(error.stack);
@@ -823,42 +819,33 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
             }
         }
         
-        // Get updated likes
-        let likes = [];
+        // Get updated like count
+        let likeCount = 0;
         if (process.env.NODE_ENV === 'production') {
             try {
-                likes = await db.any(`
-                    SELECT u.name
-                    FROM "Like" l 
-                    JOIN "User" u ON l.user_id = u.user_id 
-                    WHERE l.tweet_id = $1
+                const result = await db.one(`
+                    SELECT COUNT(*) AS count
+                    FROM "Like"
+                    WHERE tweet_id = $1
                 `, [tweetId]);
-                console.log(`Updated likes for tweet ${tweetId}:`, likes.length);
+                likeCount = parseInt(result.count);
+                console.log(`Updated like count for tweet ${tweetId}: ${likeCount}`);
             } catch (pgError) {
-                console.error("PostgreSQL select error:", pgError);
-                likes = [];
+                console.error("PostgreSQL count error:", pgError);
+                likeCount = 0;
             }
         } else {
-            const result = await dbHelpers.execute(
-                `SELECT u.name
-                FROM Like l
-                JOIN User u ON l.user_id = u.user_id
-                WHERE l.tweet_id = ?`,
-                [tweetId]
-            );
-            likes = Array.isArray(result) ? result : [];
+            const result = await dbHelpers.execute(`
+                SELECT COUNT(*) AS count
+                FROM Like
+                WHERE tweet_id = ?
+            `, [tweetId]);
+            likeCount = result ? parseInt(result.count) : 0;
         }
-        
-        // Extract just the names as an array of strings
-        const nameArray = likes.map(item => item.name || '');
-        
-        const hasLiked = !existingLike; // If it was liked before, it's unliked now, and vice versa
 
         response.json({
             message: existingLike ? "Tweet unliked successfully" : "Tweet liked successfully",
-            likes: nameArray,
-            hasLiked: hasLiked,
-            currentUser: username
+            likes: likeCount
         });
     } catch (err) {
         console.error("Error handling like:", err);
@@ -2112,3 +2099,172 @@ app.post('/follow/:userId', authenticateToken, async (request, response) => {
 
 // Make sure to export the app for import in other files
 module.exports = app;
+
+// Add support for endpoint with trailing slash (used in Home.js)
+app.get("/tweets/:tweetId/likes/", authenticateToken, async (req, res) => {
+  // Redirect to the version without trailing slash
+  const tweetId = req.params.tweetId;
+  console.log(`Redirecting /tweets/${tweetId}/likes/ to /tweets/${tweetId}/likes`);
+  
+  try {
+      const { username } = req.user;
+      const { tweetId } = req.params;
+      
+      console.log(`User ${username} requesting likes for tweet ${tweetId} (with trailing slash)`);
+      
+      // Get user
+      const user = await dbHelpers.getUserByUsername(username);
+      if (!user) {
+          console.log(`User ${username} not found in database`);
+          return res.status(400).json({ error: "User not found" });
+      }
+      
+      let likes = [];
+      let userHasLiked = false;
+      
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Get all likes for this tweet
+              likes = await db.any(`
+                  SELECT u.name, u.username, u.user_id
+                  FROM "Like" l
+                  JOIN "User" u ON l.user_id = u.user_id
+                  WHERE l.tweet_id = $1
+              `, [tweetId]);
+              
+              // Check if current user has liked
+              userHasLiked = await db.oneOrNone(`
+                  SELECT 1
+                  FROM "Like" l
+                  WHERE l.user_id = $1 AND l.tweet_id = $2
+              `, [user.user_id, tweetId]) !== null;
+              
+              console.log(`Found ${likes.length} likes for tweet ${tweetId} (PostgreSQL), user has liked: ${userHasLiked}`);
+          } catch (pgError) {
+              console.error("PostgreSQL query error:", pgError);
+              console.error(pgError.stack);
+              likes = [];
+          }
+      } else {
+          // SQLite - get all likes
+          const query = `
+              SELECT u.name, u.username, u.user_id
+              FROM Like l
+              JOIN User u ON l.user_id = u.user_id
+              WHERE l.tweet_id = ?
+          `;
+          
+          const result = await dbHelpers.execute(query, [tweetId]);
+          likes = Array.isArray(result) ? result : [];
+          
+          // Check if current user has liked
+          const userLikeQuery = `
+              SELECT 1
+              FROM Like l
+              WHERE l.user_id = ? AND l.tweet_id = ?
+          `;
+          const userLike = await dbHelpers.execute(userLikeQuery, [user.user_id, tweetId]);
+          userHasLiked = !!userLike;
+          
+          console.log(`Found ${likes.length} likes for tweet ${tweetId} (SQLite), user has liked: ${userHasLiked}`);
+      }
+      
+      // Format likes array for Home.js - this component expects likes as property of response
+      const likesArray = Array.isArray(likes) ? likes.map(item => item?.name || '') : [];
+      
+      // Response matching what Home.js expects
+      const response = {
+          likes: likesArray,
+          hasLiked: userHasLiked,
+          currentUser: username
+      };
+      
+      console.log(`Response for tweet ${tweetId} likes (trailing slash):`, response);
+      
+      return res.json(response);
+  } catch (error) {
+      console.error("Error fetching likes:", error);
+      console.error(error.stack);
+      return res.status(500).json({ 
+          error: "Server error", 
+          message: error.message,
+          details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+      });
+  }
+});
+
+// Add support for replies endpoint with trailing slash (used in Home.js)
+app.get("/tweets/:tweetId/replies/", authenticateToken, async (req, res) => {
+  try {
+    const { username } = req.user;
+    const { tweetId } = req.params;
+  
+      console.log(`User ${username} requesting replies for tweet ${tweetId} (with trailing slash)`);
+      
+      // Get user
+      const user = await dbHelpers.getUserByUsername(username);
+      if (!user) {
+          console.log(`User ${username} not found in database`);
+          return res.status(400).json({ error: "User not found" });
+      }
+      
+      let replies = [];
+      
+      if (process.env.NODE_ENV === 'production') {
+          try {
+              // Use db.any for PostgreSQL - get ALL replies without filtering
+              replies = await db.any(`
+                  SELECT u.name, r.reply
+                  FROM "Reply" r
+                  JOIN "User" u ON r.user_id = u.user_id
+                  WHERE r.tweet_id = $1
+                  ORDER BY r.date_time DESC
+              `, [tweetId]);
+              
+              console.log(`Found ${replies.length} replies for tweet ${tweetId} (PostgreSQL)`);
+          } catch (pgError) {
+              console.error("PostgreSQL query error:", pgError);
+              console.error(pgError.stack);
+              replies = [];
+          }
+      } else {
+          // SQLite - get ALL replies without filtering
+          const query = `
+        SELECT u.name, r.reply
+              FROM Reply r
+              JOIN User u ON r.user_id = u.user_id
+        WHERE r.tweet_id = ?
+              ORDER BY r.date_time DESC
+          `;
+          
+          const result = await dbHelpers.execute(query, [tweetId]);
+          replies = Array.isArray(result) ? result : [];
+          console.log(`Found ${replies.length} replies for tweet ${tweetId} (SQLite)`);
+      }
+      
+      // Format replies to match what Home.js expects - replies property in response
+      const formattedReplies = Array.isArray(replies) 
+          ? replies.map(item => ({
+              name: item?.name || '',
+              reply: item?.reply || ''
+          }))
+          : [];
+      
+      // Response object with replies property
+      const response = {
+          replies: formattedReplies
+      };
+      
+      console.log(`Response for tweet ${tweetId} replies (trailing slash):`, response);
+      
+      return res.json(response);
+    } catch (error) {
+      console.error("Error fetching replies:", error);
+      console.error(error.stack);
+      return res.status(500).json({ 
+          error: "Server error", 
+          message: error.message,
+          details: process.env.NODE_ENV !== 'production' ? error.stack : undefined
+      });
+    }
+  });
