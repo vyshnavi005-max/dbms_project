@@ -172,27 +172,45 @@ initializeServer();
 const dbHelpers = {
   // User queries
   getUserByUsername: async (username) => {
-    if (process.env.NODE_ENV === 'production') {
-      return await db.oneOrNone('SELECT * FROM "User" WHERE username = $1', [username]);
-    } else {
-      return await db.get('SELECT * FROM User WHERE username = ?', [username]);
+    try {
+      console.log(`Looking up user by username: ${username}`);
+      if (process.env.NODE_ENV === 'production') {
+        return await db.oneOrNone('SELECT * FROM "User" WHERE username = $1', [username]);
+      } else {
+        return await db.get('SELECT * FROM User WHERE username = ?', [username]);
+      }
+    } catch (error) {
+      console.error(`Error in getUserByUsername for ${username}:`, error);
+      throw error;
     }
   },
   
   getUserById: async (userId) => {
-    if (process.env.NODE_ENV === 'production') {
-      return await db.oneOrNone('SELECT * FROM "User" WHERE user_id = $1', [userId]);
-    } else {
-      return await db.get('SELECT * FROM User WHERE user_id = ?', [userId]);
+    try {
+      console.log(`Looking up user by ID: ${userId}`);
+      if (process.env.NODE_ENV === 'production') {
+        return await db.oneOrNone('SELECT * FROM "User" WHERE user_id = $1', [userId]);
+      } else {
+        return await db.get('SELECT * FROM User WHERE user_id = ?', [userId]);
+      }
+    } catch (error) {
+      console.error(`Error in getUserById for ID ${userId}:`, error);
+      throw error;
     }
   },
   
   // Tweet queries
   getTweetById: async (tweetId) => {
-    if (process.env.NODE_ENV === 'production') {
-      return await db.oneOrNone('SELECT * FROM "Tweet" WHERE tweet_id = $1', [tweetId]);
-    } else {
-      return await db.get('SELECT * FROM Tweet WHERE tweet_id = ?', [tweetId]);
+    try {
+      console.log(`Looking up tweet by ID: ${tweetId}`);
+      const query = process.env.NODE_ENV === 'production'
+        ? 'SELECT * FROM "Tweet" WHERE tweet_id = $1'
+        : 'SELECT * FROM Tweet WHERE tweet_id = ?';
+        
+      return await dbHelpers.execute(query, [tweetId]);
+    } catch (error) {
+      console.error(`Error in getTweetById for ID ${tweetId}:`, error);
+      throw error;
     }
   },
   
@@ -283,18 +301,41 @@ const authenticateToken = async (request, response, next) => {
         
         if (!jwtToken) {
             console.log("No JWT token found in headers or cookies");
-            return response.status(401).send("Invalid JWT Token");
+            return response.status(401).json({ 
+                error: "Authentication required", 
+                message: "Please log in to access this resource"
+            });
         }
         
         // Verify the token
-        const payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
+        let payload;
+        try {
+            payload = jwt.verify(jwtToken, process.env.JWT_SECRET);
+        } catch (jwtError) {
+            console.log("JWT verification error:", jwtError.message);
+            
+            if (jwtError.name === 'TokenExpiredError') {
+                return response.status(401).json({ 
+                    error: "Token expired", 
+                    message: "Your session has expired. Please log in again."
+                });
+            }
+            
+            return response.status(401).json({ 
+                error: "Invalid token", 
+                message: "Authentication failed. Please log in again."
+            });
+        }
         
         // Get user details using helper function
         const user = await dbHelpers.getUserByUsername(payload.username);
         
         if (!user) {
             console.log("User not found in database:", payload.username);
-            return response.status(401).send("Invalid JWT Token");
+            return response.status(401).json({ 
+                error: "User not found", 
+                message: "The user associated with this token no longer exists."
+            });
         }
         
         // Add user to request object
@@ -305,8 +346,12 @@ const authenticateToken = async (request, response, next) => {
         
         next();
     } catch (err) {
-        console.log("JWT verification error:", err.message);
-        return response.status(401).send("Invalid JWT Token");
+        console.log("Authentication error:", err.message);
+        console.error(err.stack);
+        return response.status(500).json({ 
+            error: "Authentication error", 
+            message: "An error occurred during authentication."
+        });
     }
 };
 
@@ -574,54 +619,85 @@ app.post("/tweets/:tweetId/like", authenticateToken, async (request, response) =
     try {
         const { username } = request.user;
         const { tweetId } = request.params;
-        let user, tweet, existingLike;
-
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(401).json({ error: "Unauthorized user" });
         
-        tweet = await dbHelpers.getTweetById(tweetId);
-        if (!tweet) return response.status(404).json({ error: "Tweet not found" });
+        console.log(`User ${username} attempting to like tweet ${tweetId}`);
         
-        existingLike = await dbHelpers.execute(
-            'SELECT * FROM "Like" WHERE user_id = $1 AND tweet_id = $2', 
-            [user.user_id, tweetId]
-        );
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(401).json({ error: "Unauthorized user" });
+        }
+        
+        // Get tweet
+        const tweet = await dbHelpers.getTweetById(tweetId);
+        if (!tweet) {
+            console.log(`Tweet ${tweetId} not found in database`);
+            return response.status(404).json({ error: "Tweet not found" });
+        }
+        
+        // Check if already liked
+        const selectQuery = process.env.NODE_ENV === 'production'
+            ? 'SELECT * FROM "Like" WHERE user_id = $1 AND tweet_id = $2'
+            : 'SELECT * FROM Like WHERE user_id = ? AND tweet_id = ?';
+        
+        const existingLike = await dbHelpers.execute(selectQuery, [user.user_id, tweetId]);
+        console.log(`Existing like check result:`, existingLike);
         
         if (existingLike) {
-            await dbHelpers.execute('DELETE FROM "Like" WHERE user_id = $1 AND tweet_id = $2', [user.user_id, tweetId]);
-        } else {
-            await dbHelpers.execute(
-                'INSERT INTO "Like" (user_id, tweet_id) VALUES ($1, $2)', 
-                [user.user_id, tweetId]
-            );
+            // Unlike
+            const deleteQuery = process.env.NODE_ENV === 'production'
+                ? 'DELETE FROM "Like" WHERE user_id = $1 AND tweet_id = $2'
+                : 'DELETE FROM Like WHERE user_id = ? AND tweet_id = ?';
             
+            await dbHelpers.execute(deleteQuery, [user.user_id, tweetId]);
+            console.log(`User ${username} unliked tweet ${tweetId}`);
+        } else {
+            // Like
+            const insertQuery = process.env.NODE_ENV === 'production'
+                ? 'INSERT INTO "Like" (user_id, tweet_id) VALUES ($1, $2)'
+                : 'INSERT INTO Like (user_id, tweet_id) VALUES (?, ?)';
+            
+            await dbHelpers.execute(insertQuery, [user.user_id, tweetId]);
+            console.log(`User ${username} liked tweet ${tweetId}`);
+            
+            // Create notification
             try {
-                await dbHelpers.execute(
-                    'INSERT INTO "Notification" (user_id, triggered_by_user_id, tweet_id, type, content, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
-                    [tweet.user_id, user.user_id, tweetId, 'like', `${username} liked your tweet.`, false]
-                );
+                const notifQuery = process.env.NODE_ENV === 'production'
+                    ? 'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)'
+                    : 'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)';
+                
+                await dbHelpers.execute(notifQuery, [
+                    tweet.user_id, 
+                    user.user_id, 
+                    tweetId, 
+                    'like', 
+                    `${username} liked your tweet.`, 
+                    false
+                ]);
             } catch (notifError) {
                 console.error("Error creating notification:", notifError);
                 // Continue even if notification creation fails
             }
         }
         
-        // Get updated likes list with usernames
-        const likes = await dbHelpers.execute(`
-            SELECT u.username
-            FROM "Like" l
-            JOIN "User" u ON l.user_id = u.user_id
-            WHERE l.tweet_id = $1
-        `, [tweetId]);
+        // Get updated likes
+        const likesQuery = process.env.NODE_ENV === 'production'
+            ? `SELECT u.username FROM "Like" l JOIN "User" u ON l.user_id = u.user_id WHERE l.tweet_id = $1`
+            : `SELECT u.username FROM Like l JOIN User u ON l.user_id = u.user_id WHERE l.tweet_id = ?`;
+        
+        const likes = await dbHelpers.execute(likesQuery, [tweetId]);
+        console.log(`Updated likes for tweet ${tweetId}:`, likes);
         
         response.json({
             message: existingLike ? "Tweet unliked successfully" : "Tweet liked successfully",
-            likes: likes.map(like => like.username),
+            likes: Array.isArray(likes) ? likes.map(like => like.username) : [],
             currentUser: username
         });
     } catch (err) {
         console.error("Error handling like:", err);
-        response.status(500).json({ error: "Internal server error" });
+        console.error(err.stack);
+        response.status(500).json({ error: "Internal server error", message: err.message });
     }
 });
 
@@ -631,48 +707,94 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
         const { username } = request.user;
         const { tweetId } = request.params;
         const { replyText } = request.body;
-        let user, tweet, isFollowing;
-
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(401).send({ error: "Unauthorized user" });
         
-        tweet = await dbHelpers.getTweetById(tweetId);
-        if (!tweet) return response.status(404).send({ error: "Tweet not found" });
+        console.log(`User ${username} attempting to reply to tweet ${tweetId}`);
         
-        isFollowing = await dbHelpers.execute(
-            'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2',
-            [user.user_id, tweet.user_id]
-        );
-        
-        if (!isFollowing) return response.status(403).send({ error: "You can only reply to tweets from users you follow" });
-        
-        await dbHelpers.execute(
-            'INSERT INTO "Reply" (user_id, tweet_id, reply) VALUES ($1, $2, $3)',
-            [user.user_id, tweetId, replyText]
-        );
-        
-        try {
-            await dbHelpers.execute(
-                'INSERT INTO "Notification" (user_id, triggered_by_user_id, tweet_id, type, content, is_read) VALUES ($1, $2, $3, $4, $5, $6)',
-                [tweet.user_id, user.user_id, tweetId, 'reply', `${username} replied: "${replyText}"`, false]
-            );
-        } catch (notifError) {
-            console.error("Error creating notification:", notifError);
-            // Continue even if notification creation fails
+        if (!replyText || replyText.trim() === '') {
+            return response.status(400).json({ error: "Reply text cannot be empty" });
         }
         
-        // Get updated replies list with names
-        const replies = await dbHelpers.execute(`
-            SELECT u.name, r.reply
-            FROM "Reply" r
-            JOIN "User" u ON r.user_id = u.user_id
-            WHERE r.tweet_id = $1
-        `, [tweetId]);
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(401).json({ error: "Unauthorized user" });
+        }
         
-        const formattedReplies = replies.map(item => ({
+        // Get tweet
+        const tweet = await dbHelpers.getTweetById(tweetId);
+        if (!tweet) {
+            console.log(`Tweet ${tweetId} not found in database`);
+            return response.status(404).json({ error: "Tweet not found" });
+        }
+        
+        // Check if following
+        const followingQuery = process.env.NODE_ENV === 'production'
+            ? 'SELECT 1 FROM "Follower" WHERE follower_user_id = $1 AND following_user_id = $2'
+            : 'SELECT 1 FROM Follower WHERE follower_user_id = ? AND following_user_id = ?';
+        
+        const isFollowing = await dbHelpers.execute(followingQuery, [user.user_id, tweet.user_id]);
+        
+        if (!isFollowing && user.user_id !== tweet.user_id) {
+            console.log(`User ${username} is not following tweet author and is not the author`);
+            return response.status(403).json({ 
+                error: "You can only reply to tweets from users you follow or your own tweets" 
+            });
+        }
+        
+        // Add reply
+        const insertQuery = process.env.NODE_ENV === 'production'
+            ? 'INSERT INTO "Reply" (user_id, tweet_id, reply) VALUES ($1, $2, $3)'
+            : 'INSERT INTO Reply (user_id, tweet_id, reply) VALUES (?, ?, ?)';
+        
+        await dbHelpers.execute(insertQuery, [user.user_id, tweetId, replyText]);
+        console.log(`User ${username} replied to tweet ${tweetId}`);
+        
+        // Create notification if the reply is not to the user's own tweet
+        if (user.user_id !== tweet.user_id) {
+            try {
+                const notifQuery = process.env.NODE_ENV === 'production'
+                    ? 'INSERT INTO "Notifications" (user_id, from_user_id, tweet_id, type, message, is_read) VALUES ($1, $2, $3, $4, $5, $6)'
+                    : 'INSERT INTO Notifications (user_id, from_user_id, tweet_id, type, message, is_read) VALUES (?, ?, ?, ?, ?, ?)';
+                
+                await dbHelpers.execute(notifQuery, [
+                    tweet.user_id, 
+                    user.user_id, 
+                    tweetId, 
+                    'reply', 
+                    `${username} replied to your tweet: "${replyText.substring(0, 30)}${replyText.length > 30 ? '...' : ''}"`, 
+                    false
+                ]);
+            } catch (notifError) {
+                console.error("Error creating notification:", notifError);
+                // Continue even if notification creation fails
+            }
+        }
+        
+        // Get updated replies
+        const repliesQuery = process.env.NODE_ENV === 'production'
+            ? `
+                SELECT u.name, r.reply
+                FROM "Reply" r
+                JOIN "User" u ON r.user_id = u.user_id
+                WHERE r.tweet_id = $1
+                ORDER BY r.date_time DESC
+            `
+            : `
+                SELECT u.name, r.reply
+                FROM Reply r
+                JOIN User u ON r.user_id = u.user_id
+                WHERE r.tweet_id = ?
+                ORDER BY r.date_time DESC
+            `;
+        
+        const replies = await dbHelpers.execute(repliesQuery, [tweetId]);
+        console.log(`Updated replies for tweet ${tweetId}:`, replies ? replies.length : 0);
+        
+        const formattedReplies = Array.isArray(replies) ? replies.map(item => ({
             name: item.name,
             reply: item.reply
-        }));
+        })) : [];
         
         response.json({
             message: "Reply added successfully",
@@ -680,7 +802,8 @@ app.post("/tweets/:tweetId/reply", authenticateToken, async (request, response) 
         });
     } catch (err) {
         console.error("Error handling reply:", err);
-        response.status(500).json({ error: "Internal server error" });
+        console.error(err.stack);
+        response.status(500).json({ error: "Internal server error", message: err.message });
     }
 });
 
@@ -691,13 +814,17 @@ convertToCamelCaseForFollowers=(user)=>{
 app.get('/profile', authenticateToken, async (req, res) => {
     try {
         const { username } = req.user;
+        console.log(`Fetching profile for user: ${username}`);
         
         // Get user details
         const user = await dbHelpers.getUserByUsername(username);
         
         if (!user) {
+            console.log(`User not found: ${username}`);
             return res.status(404).json({ error: 'User not found' });
         }
+
+        console.log(`Found user: ${user.username} (ID: ${user.user_id})`);
 
         // Use more consistent SQL for count queries
         const followersQuery = process.env.NODE_ENV === 'production' 
@@ -709,19 +836,40 @@ app.get('/profile', authenticateToken, async (req, res) => {
             : 'SELECT COUNT(*) as count FROM Follower WHERE follower_user_id = ?';
 
         // Get follower and following counts
-        const [followersResult, followingResult] = await Promise.all([
-            dbHelpers.execute(followersQuery, [user.user_id]),
-            dbHelpers.execute(followingQuery, [user.user_id])
-        ]);
+        let followersResult, followingResult;
+        
+        try {
+            followersResult = await dbHelpers.execute(followersQuery, [user.user_id]);
+            console.log("Followers query result:", followersResult);
+        } catch (err) {
+            console.error("Error fetching followers count:", err);
+            followersResult = { count: 0 };
+        }
+        
+        try {
+            followingResult = await dbHelpers.execute(followingQuery, [user.user_id]);
+            console.log("Following query result:", followingResult);
+        } catch (err) {
+            console.error("Error fetching following count:", err);
+            followingResult = { count: 0 };
+        }
         
         // Handle different db result formats safely
-        const followersCount = followersResult && typeof followersResult.count !== 'undefined' 
-            ? parseInt(followersResult.count) 
-            : 0;
+        const followersCount = followersResult && 
+            (typeof followersResult.count !== 'undefined' 
+                ? parseInt(followersResult.count) 
+                : (Array.isArray(followersResult) && followersResult.length > 0 && followersResult[0].count 
+                    ? parseInt(followersResult[0].count) 
+                    : 0));
             
-        const followingCount = followingResult && typeof followingResult.count !== 'undefined'
-            ? parseInt(followingResult.count)
-            : 0;
+        const followingCount = followingResult && 
+            (typeof followingResult.count !== 'undefined'
+                ? parseInt(followingResult.count)
+                : (Array.isArray(followingResult) && followingResult.length > 0 && followingResult[0].count
+                    ? parseInt(followingResult[0].count)
+                    : 0));
+
+        console.log(`Profile stats: ${followersCount} followers, ${followingCount} following`);
 
         // Return user profile data
         res.json({
@@ -732,51 +880,82 @@ app.get('/profile', authenticateToken, async (req, res) => {
         });
     } catch (error) {
         console.error('Error in profile endpoint:', error);
-        res.status(500).json({ error: 'Internal server error' });
+        console.error(error.stack);
+        res.status(500).json({ error: 'Internal server error', message: error.message });
     }
 });
   
 app.get("/user/followers/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, followers;
+        console.log(`Fetching followers for user: ${username}`);
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) return response.status(400).json({ error: "User not found" });
         
-        followers = await dbHelpers.execute(`
-            SELECT u.name
-            FROM "User" u
-            JOIN "Follower" f ON u.user_id = f.follower_user_id
-            WHERE f.following_user_id = $1
-        `, [user.user_id]);
+        console.log(`Got user with ID: ${user.user_id}`);
         
-        response.send(followers.map(convertToCamelCaseForFollowers));
+        const query = process.env.NODE_ENV === 'production'
+            ? `
+                SELECT u.name
+                FROM "User" u
+                JOIN "Follower" f ON u.user_id = f.follower_user_id
+                WHERE f.following_user_id = $1
+            `
+            : `
+                SELECT u.name
+                FROM User u
+                JOIN Follower f ON u.user_id = f.follower_user_id
+                WHERE f.following_user_id = ?
+            `;
+        
+        const followers = await dbHelpers.execute(query, [user.user_id]);
+        console.log(`Found ${followers ? followers.length : 0} followers`);
+        
+        // Ensure we're always returning an array
+        const result = Array.isArray(followers) ? followers.map(convertToCamelCaseForFollowers) : [];
+        response.json(result);
     } catch (error) {
         console.error("Error fetching followers:", error);
-        response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
 app.get("/user/following/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, following;
+        console.log(`Fetching following for user: ${username}`);
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) return response.status(400).json({ error: "User not found" });
         
-        following = await dbHelpers.execute(`
-            SELECT u.name
-            FROM "User" u
-            JOIN "Follower" f ON u.user_id = f.following_user_id
-            WHERE f.follower_user_id = $1
-        `, [user.user_id]);
+        console.log(`Got user with ID: ${user.user_id}`);
         
-        response.send(following.map(convertToCamelCaseForFollowers));
+        const query = process.env.NODE_ENV === 'production'
+            ? `
+                SELECT u.name
+                FROM "User" u
+                JOIN "Follower" f ON u.user_id = f.following_user_id
+                WHERE f.follower_user_id = $1
+            `
+            : `
+                SELECT u.name
+                FROM User u
+                JOIN Follower f ON u.user_id = f.following_user_id
+                WHERE f.follower_user_id = ?
+            `;
+        
+        const following = await dbHelpers.execute(query, [user.user_id]);
+        console.log(`Found ${following ? following.length : 0} following`);
+        
+        // Ensure we're always returning an array
+        const result = Array.isArray(following) ? following.map(convertToCamelCaseForFollowers) : [];
+        response.json(result);
     } catch (error) {
         console.error("Error fetching following:", error);
-        response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
@@ -793,36 +972,74 @@ app.get("/tweets/:tweetId/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
         const { tweetId } = request.params;
-        let user, dbResponse;
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        console.log(`User ${username} requesting tweet ${tweetId}`);
         
-        dbResponse = await dbHelpers.execute(`
-            SELECT 
-                t.tweet_id as tweet_id,
-                t.tweet,
-                COUNT(DISTINCT l.like_id) AS likes,
-                COUNT(DISTINCT r.reply_id) AS replies,
-                t.date_time
-            FROM "Tweet" t
-            LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
-            LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
-            WHERE t.tweet_id = $1  
-            AND t.user_id IN (
-                SELECT f.following_user_id FROM "Follower" f WHERE f.follower_user_id = $2
-            )
-            GROUP BY t.tweet_id, t.tweet, t.date_time
-        `, [tweetId, user.user_id]);
-        
-        if (!dbResponse) {
-            return response.status(401).send("Invalid Request");
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
         }
         
-        return response.send(convertsnakecaseToCamelCase(dbResponse));
+        // Get tweet with counts
+        const query = process.env.NODE_ENV === 'production'
+            ? `
+                SELECT 
+                    t.tweet_id as tweet_id,
+                    t.tweet,
+                    COUNT(DISTINCT l.like_id) AS likes,
+                    COUNT(DISTINCT r.reply_id) AS replies,
+                    t.date_time
+                FROM "Tweet" t
+                LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
+                LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
+                WHERE t.tweet_id = $1  
+                AND (
+                    t.user_id IN (
+                        SELECT f.following_user_id FROM "Follower" f WHERE f.follower_user_id = $2
+                    )
+                    OR t.user_id = $2
+                )
+                GROUP BY t.tweet_id, t.tweet, t.date_time
+            `
+            : `
+                SELECT 
+                    t.tweet_id as tweet_id,
+                    t.tweet,
+                    COUNT(DISTINCT l.like_id) AS likes,
+                    COUNT(DISTINCT r.reply_id) AS replies,
+                    t.date_time
+                FROM Tweet t
+                LEFT JOIN Like l ON t.tweet_id = l.tweet_id
+                LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
+                WHERE t.tweet_id = ?  
+                AND (
+                    t.user_id IN (
+                        SELECT f.following_user_id FROM Follower f WHERE f.follower_user_id = ?
+                    )
+                    OR t.user_id = ?
+                )
+                GROUP BY t.tweet_id, t.tweet, t.date_time
+            `;
+        
+        const params = process.env.NODE_ENV === 'production'
+            ? [tweetId, user.user_id]
+            : [tweetId, user.user_id, user.user_id];
+        
+        const dbResponse = await dbHelpers.execute(query, params);
+        console.log(`Tweet query result:`, dbResponse);
+        
+        if (!dbResponse) {
+            console.log(`Tweet ${tweetId} not found or not accessible to user ${username}`);
+            return response.status(404).json({ error: "Tweet not found or you don't have access to it" });
+        }
+        
+        return response.json(convertsnakecaseToCamelCase(dbResponse));
     } catch (error) {
         console.error("Error fetching tweet:", error);
-        return response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        return response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
@@ -834,23 +1051,47 @@ const convertToCamelCaseForReplies=(replies)=>({
 app.get("/user/tweets/replies/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, replies;
+        console.log(`User ${username} requesting tweet replies`);
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
-        replies = await dbHelpers.execute(`
-            SELECT t.tweet_id, u.name, r.reply 
-            FROM "Tweet" t 
-            JOIN "Reply" r ON t.tweet_id = r.tweet_id 
-            JOIN "User" u ON r.user_id = u.user_id 
-            WHERE t.user_id = $1
-        `, [user.user_id]);
+        // Query tweets replies
+        const query = process.env.NODE_ENV === 'production' 
+            ? `
+                SELECT t.tweet_id, u.name, r.reply 
+                FROM "Tweet" t 
+                JOIN "Reply" r ON t.tweet_id = r.tweet_id 
+                JOIN "User" u ON r.user_id = u.user_id 
+                WHERE t.user_id = $1
+                ORDER BY r.date_time DESC
+            `
+            : `
+                SELECT t.tweet_id, u.name, r.reply 
+                FROM Tweet t 
+                JOIN Reply r ON t.tweet_id = r.tweet_id 
+                JOIN User u ON r.user_id = u.user_id 
+                WHERE t.user_id = ?
+                ORDER BY r.date_time DESC
+            `;
         
-        response.send(replies.map((eachItem) => convertToCamelCaseForReplies(eachItem)));
+        const replies = await dbHelpers.execute(query, [user.user_id]);
+        console.log(`Found ${replies ? replies.length : 0} replies for user's tweets`);
+        
+        // Ensure we're always returning an array
+        const result = Array.isArray(replies) 
+            ? replies.map(convertToCamelCaseForReplies) 
+            : [];
+            
+        response.json(result);
     } catch (error) {
         console.error("Error fetching tweet replies:", error);
-        response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
@@ -861,23 +1102,45 @@ const convertToCamelCaseForLikes=(replies)=>({
 app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, likes;
+        console.log(`User ${username} requesting tweet likes`);
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
+        }
         
-        likes = await dbHelpers.execute(`
-            SELECT t.tweet_id, u.name 
-            FROM "Tweet" t 
-            JOIN "Like" l ON t.tweet_id = l.tweet_id 
-            JOIN "User" u ON l.user_id = u.user_id 
-            WHERE t.user_id = $1
-        `, [user.user_id]);
+        // Query tweet likes
+        const query = process.env.NODE_ENV === 'production' 
+            ? `
+                SELECT t.tweet_id, u.name 
+                FROM "Tweet" t 
+                JOIN "Like" l ON t.tweet_id = l.tweet_id 
+                JOIN "User" u ON l.user_id = u.user_id 
+                WHERE t.user_id = $1
+            `
+            : `
+                SELECT t.tweet_id, u.name 
+                FROM Tweet t 
+                JOIN Like l ON t.tweet_id = l.tweet_id 
+                JOIN User u ON l.user_id = u.user_id 
+                WHERE t.user_id = ?
+            `;
         
-        response.send(likes.map((eachItem) => convertToCamelCaseForLikes(eachItem)));
+        const likes = await dbHelpers.execute(query, [user.user_id]);
+        console.log(`Found ${likes ? likes.length : 0} likes for user's tweets`);
+        
+        // Ensure we're always returning an array
+        const result = Array.isArray(likes) 
+            ? likes.map(convertToCamelCaseForLikes) 
+            : [];
+            
+        response.json(result);
     } catch (error) {
         console.error("Error fetching tweet likes:", error);
-        response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
   
@@ -886,21 +1149,29 @@ app.get("/user/tweets/likes/", authenticateToken, async (request, response) => {
 app.post("/user/tweets", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user;
+        console.log(`User ${username} attempting to create a new tweet`);
         
-        user = await dbHelpers.getUserByUsername(username);
-
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
         if (!user) {
-            return response.status(400).send("Invalid user");
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "Invalid user" });
         }
 
         const { tweet } = request.body;
+        console.log(`Tweet content: "${tweet && tweet.length > 30 ? tweet.substring(0, 30) + '...' : tweet}"`);
 
         if (!tweet || tweet.trim() === "") {
-            return response.status(400).send("Tweet cannot be empty.");
+            return response.status(400).json({ error: "Tweet cannot be empty" });
         }
 
-        await dbHelpers.execute('INSERT INTO "Tweet" (tweet, user_id) VALUES ($1, $2)', [tweet, user.user_id]);
+        // Insert tweet
+        const query = process.env.NODE_ENV === 'production'
+            ? 'INSERT INTO "Tweet" (tweet, user_id) VALUES ($1, $2) RETURNING tweet_id, date_time'
+            : 'INSERT INTO Tweet (tweet, user_id) VALUES (?, ?)';
+            
+        const result = await dbHelpers.execute(query, [tweet, user.user_id]);
+        console.log('Tweet created successfully');
 
         return response.status(201).json({
             message: "Created a Tweet",
@@ -914,37 +1185,61 @@ app.post("/user/tweets", authenticateToken, async (request, response) => {
           
     } catch (error) {
         console.error("Error posting tweet:", error);
-        return response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        return response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
 app.get("/user/tweets/", authenticateToken, async (request, response) => {
     try {
         const { username } = request.user;
-        let user, dbResponse;
+        console.log(`Fetching tweets for user: ${username}`);
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) return response.status(400).json({ error: "User not found" });
         
-        dbResponse = await dbHelpers.execute(`
-            SELECT
-                t.tweet_id AS tweet_id,
-                t.tweet, 
-                COUNT(DISTINCT l.like_id) AS likes,
-                COUNT(DISTINCT r.reply_id) AS replies,
-                t.date_time
-            FROM "Tweet" t
-            LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
-            LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
-            WHERE t.user_id = $1
-            GROUP BY t.tweet_id, t.tweet, t.date_time
-            ORDER BY t.date_time DESC
-        `, [user.user_id]);
+        console.log(`Got user with ID: ${user.user_id}`);
         
-        return response.send(dbResponse.map(convertsnakecaseToCamelCase));
+        const query = process.env.NODE_ENV === 'production'
+            ? `
+                SELECT
+                    t.tweet_id AS tweet_id,
+                    t.tweet, 
+                    COUNT(DISTINCT l.like_id) AS likes,
+                    COUNT(DISTINCT r.reply_id) AS replies,
+                    t.date_time
+                FROM "Tweet" t
+                LEFT JOIN "Like" l ON t.tweet_id = l.tweet_id
+                LEFT JOIN "Reply" r ON t.tweet_id = r.tweet_id
+                WHERE t.user_id = $1
+                GROUP BY t.tweet_id, t.tweet, t.date_time
+                ORDER BY t.date_time DESC
+            `
+            : `
+                SELECT
+                    t.tweet_id AS tweet_id,
+                    t.tweet, 
+                    COUNT(DISTINCT l.like_id) AS likes,
+                    COUNT(DISTINCT r.reply_id) AS replies,
+                    t.date_time
+                FROM Tweet t
+                LEFT JOIN Like l ON t.tweet_id = l.tweet_id
+                LEFT JOIN Reply r ON t.tweet_id = r.tweet_id
+                WHERE t.user_id = ?
+                GROUP BY t.tweet_id, t.tweet, t.date_time
+                ORDER BY t.date_time DESC
+            `;
+        
+        const dbResponse = await dbHelpers.execute(query, [user.user_id]);
+        console.log(`Found ${dbResponse ? dbResponse.length : 0} tweets`);
+        
+        // Ensure we're returning a valid array
+        const result = Array.isArray(dbResponse) ? dbResponse.map(convertsnakecaseToCamelCase) : [];
+        return response.json(result);
     } catch (error) {
         console.error("Error getting tweets:", error);
-        return response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        return response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
@@ -952,23 +1247,45 @@ app.delete("/tweets/:tweetId/", authenticateToken, async (request, response) => 
     try {
         const { username } = request.user;
         const { tweetId } = request.params;
-        let user, tweet;
         
-        user = await dbHelpers.getUserByUsername(username);
-        if (!user) return response.status(400).send("User not found");
+        console.log(`User ${username} attempting to delete tweet ${tweetId}`);
         
-        tweet = await dbHelpers.getTweetById(tweetId);
-        
-        if (!tweet || tweet.user_id !== user.user_id) {
-            return response.status(401).send("Invalid Request");
+        // Get user
+        const user = await dbHelpers.getUserByUsername(username);
+        if (!user) {
+            console.log(`User ${username} not found in database`);
+            return response.status(400).json({ error: "User not found" });
         }
         
-        await dbHelpers.execute('DELETE FROM "Tweet" WHERE tweet_id = $1', [tweetId]);
+        // Get tweet
+        const tweet = await dbHelpers.getTweetById(tweetId);
+        if (!tweet) {
+            console.log(`Tweet ${tweetId} not found in database`);
+            return response.status(404).json({ error: "Tweet not found" });
+        }
         
-        return response.send("Tweet Removed");
+        // Check ownership
+        if (tweet.user_id !== user.user_id) {
+            console.log(`User ${username} (ID: ${user.user_id}) is not the owner of tweet ${tweetId} (owner: ${tweet.user_id})`);
+            return response.status(403).json({ error: "You can only delete your own tweets" });
+        }
+        
+        // Delete tweet
+        const query = process.env.NODE_ENV === 'production'
+            ? 'DELETE FROM "Tweet" WHERE tweet_id = $1'
+            : 'DELETE FROM Tweet WHERE tweet_id = ?';
+            
+        await dbHelpers.execute(query, [tweetId]);
+        console.log(`Tweet ${tweetId} deleted successfully`);
+        
+        return response.json({ 
+            success: true,
+            message: "Tweet deleted successfully" 
+        });
     } catch (error) {
         console.error("Error deleting tweet:", error);
-        return response.status(500).send("Internal Server Error");
+        console.error(error.stack);
+        return response.status(500).json({ error: "Internal Server Error", message: error.message });
     }
 });
 
