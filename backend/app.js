@@ -210,11 +210,11 @@ const dbHelpers = {
       
       if (process.env.NODE_ENV === 'production') {
         // For PostgreSQL
-        // Replace ? parameters with $1, $2, etc. if needed
+       
         let pgQuery = query;
         if (pgQuery.includes('?')) {
           console.log('Converting ? parameters to $n format for PostgreSQL');
-          // Replace ? with $1, $2, etc.
+         
           let paramIndex = 0;
           pgQuery = pgQuery.replace(/\?/g, () => `$${++paramIndex}`);
           console.log('Converted query:', pgQuery);
@@ -222,11 +222,11 @@ const dbHelpers = {
         
         // Determine the right method based on expected result
         if (normalizedQuery.startsWith('select')) {
-          // Handle COUNT queries which may return a single row with count
+          
           if (normalizedQuery.includes('count(') || normalizedQuery.includes(' count ')) {
             return await db.oneOrNone(pgQuery, params);
           }
-          // Handle queries expected to return at most one row
+        
           else if (normalizedQuery.includes('limit 1') || 
               (normalizedQuery.includes('where') && 
               (normalizedQuery.includes('user_id =') || normalizedQuery.includes('tweet_id =') || 
